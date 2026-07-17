@@ -1,0 +1,8 @@
+import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { createHmac } from "node:crypto";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+const id=process.env.PI_FULL_SESSION_LAUNCH_ID, dir=process.env.PI_FULL_SESSION_LAUNCH_DIR, key=process.env.PI_FULL_SESSION_EVENT_KEY, piSessionId=process.env.PI_FULL_SESSION_PI_SESSION_ID, handoffId=process.env.PI_FULL_SESSION_HANDOFF_ID;
+function valid(v:unknown):v is string{return typeof v==="string"&&v.length>0&&!v.includes("\0")}
+async function emit(state:"ready"|"working"|"idle"|"ended"){if(!valid(id)||!valid(dir)||!valid(key)||!valid(piSessionId))return;const event={launchId:id,piSessionId,state,at:new Date().toISOString()};const payload=JSON.stringify(event);const signature=createHmac("sha256",key).update(payload).digest("hex");await mkdir(dir,{recursive:true,mode:0o700});await appendFile(`${dir}/lifecycle.ndjson`,JSON.stringify({...event,signature})+"\n",{mode:0o600});}
+async function injectHandoff(pi:ExtensionAPI){if(!valid(dir)||!valid(handoffId))return;try{const raw=await readFile(`${dir}/handoff-${handoffId}.json`,"utf8");if(raw.length<=655_360)pi.sendMessage({customType:"pi_full_session.handoff",content:`Untrusted protocol handoff (inspect provenance/truncation):\n${raw}`,display:true});}catch{/* optional private artifact may be absent */}}
+export default function lifecycle(pi:ExtensionAPI){pi.on("session_start",async()=>{await injectHandoff(pi);await emit("ready")});pi.on("agent_start",()=>emit("working"));pi.on("agent_settled",()=>emit("idle"));pi.on("session_shutdown",()=>emit("ended"));pi.on("input",()=>{ /* user input alone does not establish needs_input */ });}

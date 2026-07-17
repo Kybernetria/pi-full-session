@@ -1,76 +1,58 @@
 # pi-full-session
 
-A protocol package for launching durable, interactive **Pi CLI/TUI processes** in a selected terminal host. It is intentionally distinct from a protocol SDK-backed `AgentSession`.
+`@kybernetria/pi-full-session` is a Pi Protocol 0.2.0 node (`pi_full_session`) that launches a real, durable **Pi CLI/TUI process**. It never uses an SDK `AgentSession` and does not stream the launched conversation through the protocol call.
 
-A full Pi session keeps normal Pi behavior: project/resource discovery, extensions, skills, session persistence, interactive user takeover, model selection, and a real terminal. Protocol calls launch and manage it through stable metadata; they do not proxy its token stream.
+## Install
 
-## Proposed provides
+Install this package as a Pi extension/package in the normal Pi package configuration, then enable it. The package requires compatible `@kybernetria/pi-protocol` and Pi coding-agent installations. Its manifest registers handler-backed provides:
+
+- `launch` — existing absolute directory
+- `launch_worktree` — validated Git branch/worktree
+- `status`, `focus`, `send_input`, `stop`
+
+All launch/control effects require protocol confirmation. Pi is invoked safely as an executable plus argument array:
 
 ```text
-pi_full_session.launch
-pi_full_session.launch_worktree
-pi_full_session.status
-pi_full_session.focus
-pi_full_session.send_input
-pi_full_session.stop
+pi --session <generated UUID> --extension <lifecycle extension> [--name NAME] [--model MODEL] [--thinking LEVEL] [initial prompt]
 ```
 
-`launch` supports an existing `cwd` or no worktree. `launch_worktree` is the explicit convenience operation for a new isolated Git worktree.
+`--session` is deliberately used (Pi accepts partial UUID lookup behavior); protocol launch IDs, Pi session IDs, and terminal IDs are independent.
 
-## Core launch contract
+## User-global configuration
+
+Configuration is read from `PI_FULL_SESSION_CONFIG`, otherwise `~/.pi/agent/pi-full-session.json`. Example:
 
 ```json
 {
-  "cwd": "/absolute/path/to/repository",
-  "workspace": {
-    "mode": "new_worktree",
-    "branch": "agent/auth",
-    "destination": null
-  },
-  "terminal": "selected",
-  "model": "openai-codex/gpt-5.6-terra",
-  "thinking": "medium",
-  "initialPrompt": "Implement the requested auth changes.",
-  "name": "auth-agent",
-  "handoff": { "items": [] }
+  "selectedHost": "stock",
+  "piCommand": "pi",
+  "terminalCommand": ["xterm", "-e"],
+  "allowedModels": ["provider/model-id"],
+  "allowedThinking": ["off", "low", "medium", "high"],
+  "maxRecords": 200
 }
 ```
 
-The response returns a launch record, not an SDK agent session:
+`terminalCommand` is argv, never a shell snippet. The stock adapter appends the Pi executable and validated argv, and is **launch-only**. It does not claim focus, input, process status, or stop. In particular, `stop` fails with capability unavailable for stock terminals: a launch-only terminal cannot honestly identify or stop its Pi child.
+
+For term-mux use:
 
 ```json
-{
-  "state": "launched",
-  "piSessionId": "...",
-  "worktreePath": "/...",
-  "branch": "agent/auth",
-  "terminal": {
-    "host": "term_mux",
-    "workspaceId": "...",
-    "surfaceId": "...",
-    "capabilities": ["focus", "send_input", "status"]
-  },
-  "handoffId": "..."
-}
+{"selectedHost":"term_mux","termMux":{"socketPath":"/path/to/endpoint.sock"}}
 ```
 
-`piSessionId`, protocol `request.session.id`, and any terminal-host IDs are separate identifiers.
+or configure `termMux.command` as an argv command transport. The adapter sends NDJSON requests, requires a `handshake` response with advertised capabilities before accepting returned workspace/surface IDs, and only enables controls advertised by that server. Native worktree support is used only when advertised; otherwise it runs `git worktree add -b` then asks the host to launch at that cwd.
 
-## Terminal hosts
+## Security, lifecycle, and recovery
 
-`pi_full_session` depends on a small host-adapter contract rather than requiring term-mux:
+Launch records are user-owned `0600` JSON files under `~/.pi/agent/pi-full-session/launches` (or `registryDir`), atomically replaced under a bounded lock and retention policy. They contain no API keys or lifecycle signing key. Each launch has a private `0700` artifact directory containing bounded handoffs and a lifecycle verification key.
 
-- **term-mux:** durable workspace/surface IDs, focus, input, and explicit lifecycle events.
-- **selected stock terminal:** launches Pi in the configured terminal and returns only capabilities that the terminal actually supports.
-- **current terminal:** optional adapter for launching Pi in the caller's existing terminal.
+The included `extensions/lifecycle.ts` receives only explicit `PI_FULL_SESSION_*` environment values from the launcher. It signs local events and writes only inside that private launch directory. It uses Pi official `session_start`, `agent_start`, `agent_settled`, `input`, and `session_shutdown` events. Thus state starts as `launched`; it becomes `ready`, `working`, `idle`, or `ended` only after an event. `agent_settled` truthfully means `idle`; input is not misrepresented as `needs_input`.
 
-A host must never claim readiness, process control, or input delivery that it cannot verify.
+Worktrees are intentionally retained on launch failure and marked in recovery metadata. Inspect `status`, recover files manually, and remove a worktree yourself only when safe.
 
 ## Handoffs
 
-A handoff carries protocol **data or references**, not a provide implementation. A launch may request:
+`handoff.items` accepts bounded `snapshot` or `reference` items. Snapshots are normal fabric invocations, stored in private files and capped at 32 KiB each. Snapshot targets declaring effects/confirmation are rejected unless `handoff.allowEffects` is explicitly set. References are only marked available when permitted by configured `allowedReferenceTargets`; no implementation is copied into the spawned session.
 
-- `snapshot`: invoke a compatible provide before launch and deliver its bounded output to the new Pi session;
-- `reference`: deliver a target and instruction for the new Pi session to call, after confirming it is available there.
-
-Handoff sources are generic; `pi_todo` is one optional source, not a core dependency. See [the implementation plan](docs/PLAN.md).
+Run `npm test` and `npm run typecheck`. Tests use the injectable `FakeHost`; they never need Pi, term-mux, or a graphical terminal.

@@ -1,0 +1,23 @@
+{
+  "name": "@kybernetria/pi-full-session",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Launch durable Pi CLI sessions through pi-protocol terminal hosts.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/**/*.test.ts"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.80.10",
+    "@kybernetria/pi-protocol": "^1.0.1"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.80.10",
+    "@kybernetria/pi-protocol": "^1.0.1",
+    "@mariozechner/pi-ai": "^0.73.1",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.0"
+  }
+}
