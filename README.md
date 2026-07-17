@@ -29,6 +29,8 @@ Configuration is read from `PI_FULL_SESSION_CONFIG`, otherwise `~/.pi/agent/pi-f
   "terminalCommand": ["xterm", "-e"],
   "allowedModels": ["provider/model-id"],
   "allowedThinking": ["off", "low", "medium", "high"],
+  "allowedReferenceTargets": ["pi_todo.get", "my_node.context"],
+  "allowSnapshotEffects": false,
   "maxRecords": 200
 }
 ```
@@ -41,11 +43,11 @@ For term-mux use:
 {"selectedHost":"term_mux","termMux":{"socketPath":"/path/to/endpoint.sock"}}
 ```
 
-or configure `termMux.command` as an argv command transport. The adapter sends NDJSON requests, requires a `handshake` response with advertised capabilities before accepting returned workspace/surface IDs, and only enables controls advertised by that server. Native worktree support is used only when advertised; otherwise it runs `git worktree add -b` then asks the host to launch at that cwd.
+or configure `termMux.command` as an argv command transport (one NDJSON request is written to its stdin). The adapter sends NDJSON requests, requires a `handshake` response with advertised capabilities before accepting returned workspace/surface IDs, and only enables controls advertised by that server. Native worktree support is used only when advertised; otherwise it runs `git worktree add -b` then asks the host to launch at that cwd.
 
 ## Security, lifecycle, and recovery
 
-Launch records are user-owned `0600` JSON files under `~/.pi/agent/pi-full-session/launches` (or `registryDir`), atomically replaced under a bounded lock and retention policy. They contain no API keys or lifecycle signing key. Each launch has a private `0700` artifact directory containing bounded handoffs and a lifecycle verification key.
+Launch records are user-owned `0600` JSON files under `~/.pi/agent/pi-full-session/launches` (or `registryDir`), atomically replaced under a bounded lock and retention policy. The registry rejects symlinks, non-private modes, and files owned by another UID. Records contain no API keys or lifecycle signing key. Each launch has a private `0700` artifact directory containing bounded handoffs and a lifecycle verification key.
 
 The included `extensions/lifecycle.ts` receives only explicit `PI_FULL_SESSION_*` environment values from the launcher. It signs local events and writes only inside that private launch directory. It uses Pi official `session_start`, `agent_start`, `agent_settled`, `input`, and `session_shutdown` events. Thus state starts as `launched`; it becomes `ready`, `working`, `idle`, or `ended` only after an event. `agent_settled` truthfully means `idle`; input is not misrepresented as `needs_input`.
 
@@ -53,6 +55,6 @@ Worktrees are intentionally retained on launch failure and marked in recovery me
 
 ## Handoffs
 
-`handoff.items` accepts bounded `snapshot` or `reference` items. Snapshots are normal fabric invocations, stored in private files and capped at 32 KiB each. Snapshot targets declaring effects/confirmation are rejected unless `handoff.allowEffects` is explicitly set. References are only marked available when permitted by configured `allowedReferenceTargets`; no implementation is copied into the spawned session.
+`handoff.items` accepts bounded `snapshot` or `reference` items. Snapshots are normal fabric invocations, stored in private files and capped at 32 KiB each (128 KiB for the complete bundle), with generated invocation trace IDs and timestamps. Snapshot targets declaring effects/confirmation are rejected unless both `handoff.allowEffects` is explicitly set and the user-global `allowSnapshotEffects` policy is true. References are marked available only when both the provide exists in the current fabric and its exact target is listed in configured `allowedReferenceTargets`; without that explicit configured package-set proof they are unavailable. No implementation is copied into the spawned session.
 
 Run `npm test` and `npm run typecheck`. Tests use the injectable `FakeHost`; they never need Pi, term-mux, or a graphical terminal.
