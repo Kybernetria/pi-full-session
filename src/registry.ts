@@ -1,4 +1,4 @@
-import { chmod, lstat, mkdir, open, readdir, readFile, rename, stat, unlink } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, readFile, rename, rm, stat, unlink } from "node:fs/promises";
 import { constants } from "node:fs";
 import { join } from "node:path";
 import type { LaunchRecord } from "./types.js";
@@ -16,11 +16,18 @@ export class LaunchRegistry {
   }
 
   async init(): Promise<void> {
+    try {
+      const existing = await lstat(this.dir);
+      if (!existing.isDirectory() || existing.isSymbolicLink()) throw new Error("registry directory must be a real directory");
+      this.assertOwnedPrivate(existing, "registry directory", false);
+      return;
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
     await mkdir(this.dir, { recursive: true, mode: 0o700 });
-    await chmod(this.dir, 0o700);
-    const info = await lstat(this.dir);
-    if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("registry directory must be a real directory");
-    this.assertOwnedPrivate(info, "registry directory", false);
+    const created = await lstat(this.dir);
+    if (!created.isDirectory() || created.isSymbolicLink()) throw new Error("registry directory must be a real directory");
+    this.assertOwnedPrivate(created, "registry directory", false);
   }
 
   async save(record: LaunchRecord): Promise<void> {
@@ -38,8 +45,15 @@ export class LaunchRegistry {
     } catch {
       throw new Error("launch record is malformed");
     }
-    if (record.ownerUid !== this.uid()) throw new Error("launch is owned by another user");
+    if (!record || typeof record !== "object" || record.version !== 1 || record.ownerUid !== this.uid()) {
+      throw new Error("launch record has an invalid version or owner");
+    }
     if (record.launchId !== id) throw new Error("launch record identity mismatch");
+    if (typeof record.piSessionId !== "string" || typeof record.cwd !== "string"
+        || !["launched", "ready", "working", "idle", "ended"].includes(record.state)
+        || !record.terminal || typeof record.terminal !== "object" || typeof record.terminal.host !== "string") {
+      throw new Error("launch record is missing required fields");
+    }
     return record;
   }
 
@@ -60,14 +74,21 @@ export class LaunchRegistry {
     const file = this.file(record.launchId);
     const temp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
     const handle = await open(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
+    let writeError: unknown;
     try {
       await handle.writeFile(JSON.stringify(record));
       await handle.sync();
+    } catch (error) {
+      writeError = error;
     } finally {
       await handle.close();
     }
-    await rename(temp, file);
-    await chmod(file, 0o600);
+    if (writeError) {
+      await unlink(temp).catch(() => undefined);
+      throw writeError;
+    }
+    try { await rename(temp, file); }
+    catch (error) { await unlink(temp).catch(() => undefined); throw error; }
     await this.pruneUnlocked();
   }
 
@@ -102,11 +123,32 @@ export class LaunchRegistry {
   private async pruneUnlocked(): Promise<void> {
     const files = (await readdir(this.dir)).filter(file => /^[0-9a-f-]{36}\.json$/i.test(file));
     if (files.length <= this.max) return;
-    const ranked = await Promise.all(files.map(async file => ({ file, time: (await stat(join(this.dir, file))).mtimeMs })));
-    for (const item of ranked.sort((a, b) => a.time - b.time).slice(0, files.length - this.max)) {
-      const info = await lstat(join(this.dir, item.file));
+    const ranked = await Promise.all(files.map(async file => {
+      const path = join(this.dir, file);
+      const info = await lstat(path);
       this.assertOwnedPrivate(info, "launch record", true);
+      let ended = false;
+      try { ended = (JSON.parse(await readFile(path, "utf8")) as { state?: unknown }).state === "ended"; }
+      catch { /* malformed records are retained for manual inspection */ }
+      return { file, time: (await stat(path)).mtimeMs, ended };
+    }));
+    // Never discard the only durable handle for a potentially running launch.
+    // The registry may temporarily exceed max when too few ended records exist.
+    const removable = ranked.filter(item => item.ended).sort((a, b) => a.time - b.time)
+      .slice(0, Math.max(0, files.length - this.max));
+    for (const item of removable) {
       await unlink(join(this.dir, item.file));
+      const launchId = item.file.slice(0, -".json".length);
+      const artifactDir = join(this.dir, launchId);
+      try {
+        const info = await lstat(artifactDir);
+        if (info.isDirectory() && !info.isSymbolicLink() && (info.mode & PRIVATE_MASK) === 0
+            && (typeof process.getuid !== "function" || info.uid === this.uid())) {
+          await rm(artifactDir, { recursive: true });
+        }
+      } catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
     }
   }
 

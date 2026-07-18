@@ -1,4 +1,4 @@
-export type Capability = "focus" | "send_input" | "status" | "lifecycle_events" | "stop" | "native_worktree";
+export type Capability = "status" | "lifecycle_events" | "stop";
 
 export type TerminalHandle = {
   workspaceId?: string;
@@ -19,11 +19,8 @@ export interface TerminalHost {
   id: string;
   capabilities(): Promise<Capability[]>;
   launch(request: LaunchRequest): Promise<TerminalHandle>;
-  focus?(handle: TerminalHandle): Promise<void>;
-  sendInput?(handle: TerminalHandle, text: string): Promise<void>;
   status?(handle: TerminalHandle): Promise<unknown>;
   stop?(handle: TerminalHandle): Promise<void>;
-  createWorktree?(request: { cwd: string; branch: string; destination?: string }): Promise<{ path: string; branch: string }>;
 }
 
 export type LifecycleState = "launched" | "ready" | "working" | "idle" | "ended";
@@ -49,7 +46,7 @@ export type AppConfig = {
   selectedHost?: "stock" | "term_mux";
   piCommand?: string;
   terminalCommand?: string[];
-  termMux?: { socketPath?: string; command?: string[] };
+  termMux?: { socketPath?: string; command?: string[]; timeoutMs?: number };
   allowedModels?: string[];
   allowedThinking?: string[];
   registryDir?: string;
@@ -58,4 +55,6 @@ export type AppConfig = {
   allowedReferenceTargets?: string[];
   /** Deployment policy gate; callers must also set handoff.allowEffects. */
   allowSnapshotEffects?: boolean;
+  /** Run `npm ci --prefer-offline` in the worktree after creating it (default: true). Set to false to skip. */
+  installDependencies?: boolean;
 };
