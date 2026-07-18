@@ -11,32 +11,242 @@
       "description": "Launch a real Pi CLI session in an existing absolute directory.",
       "effects": ["process_spawn", "file_write"],
       "policy": {"confirmation": "required"},
-      "inputSchema": {"type": "object", "required": ["cwd"], "properties": {
-        "cwd": {"type": "string", "description": "Existing absolute working directory."},
-        "workspace": {"type": "object", "properties": {"mode": {"type": "string", "enum": ["none", "existing"]}}},
-        "terminal": {"type": "string", "enum": ["stock", "term_mux"]},
-        "model": {"type": "string"}, "thinking": {"type": "string", "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"]},
-        "name": {"type": "string"}, "initialPrompt": {"type": "string"},
-        "handoff": {"type": "object", "properties": {"allowEffects": {"type": "boolean"}, "items": {"type": "array", "items": {"type": "object", "required": ["target", "as", "mode"], "properties": {"target": {"type": "string"}, "input": {}, "as": {"type": "string"}, "mode": {"type": "string", "enum": ["snapshot", "reference"]}, "required": {"type": "boolean"}}}}}}
-      }},
-      "outputSchema": {"type": "object", "required": ["launchId", "state", "piSessionId", "cwd", "terminal"], "properties": {"launchId": {"type": "string"}, "state": {"type": "string", "enum": ["launched", "ready", "working", "idle", "ended"]}, "piSessionId": {"type": "string"}, "cwd": {"type": "string"}, "branch": {"type": "string"}, "worktreePath": {"type": "string"}, "handoffId": {"type": "string"}, "terminal": {"type": "object"}}},
+      "inputSchema": {
+        "type": "object",
+        "required": ["cwd"],
+        "properties": {
+          "cwd": {"type": "string", "description": "Existing absolute working directory; control characters are rejected."},
+          "workspace": {
+            "type": "object",
+            "required": ["mode"],
+            "description": "Optional compatibility declaration for launching in the supplied directory.",
+            "properties": {"mode": {"type": "string", "enum": ["none", "existing"]}}
+          },
+          "terminal": {"type": "string", "enum": ["stock", "term_mux"], "description": "Terminal host override; it must be configured and available."},
+          "model": {"type": "string", "description": "Provider/model identifier permitted by package configuration."},
+          "thinking": {"type": "string", "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"], "description": "Thinking level permitted by package configuration."},
+          "name": {"type": "string", "description": "Optional non-empty session name using supported safe characters, at most 120 UTF-8 bytes."},
+          "initialPrompt": {"type": "string", "description": "Optional initial prompt, at most 16384 UTF-8 bytes and without control characters."},
+          "handoff": {
+            "type": "object",
+            "required": ["items"],
+            "description": "Optional bounded bundle of snapshot or reference handoffs; at most 20 items are accepted.",
+            "properties": {
+              "allowEffects": {"type": "boolean", "description": "Caller approval for effectful snapshots; deployment policy must also allow them."},
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["target", "as", "mode"],
+                  "properties": {
+                    "target": {"type": "string", "description": "Protocol target in node.provide form."},
+                    "input": {"description": "JSON-serializable input passed to or retained for the target."},
+                    "as": {"type": "string", "description": "Unique handoff alias."},
+                    "mode": {"type": "string", "enum": ["snapshot", "reference"]},
+                    "required": {"type": "boolean", "description": "Fail launch when this handoff cannot be prepared."}
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "required": ["version", "launchId", "ownerUid", "createdAt", "updatedAt", "state", "piSessionId", "cwd", "terminal"],
+        "properties": {
+          "version": {"type": "integer", "enum": [1]},
+          "launchId": {"type": "string", "description": "Durable UUID used by status and stop."},
+          "ownerUid": {"type": "integer"},
+          "createdAt": {"type": "string", "description": "ISO-8601 creation timestamp."},
+          "updatedAt": {"type": "string", "description": "ISO-8601 last-update timestamp."},
+          "state": {"type": "string", "enum": ["launched", "ready", "working", "idle", "ended"]},
+          "piSessionId": {"type": "string", "description": "Pi session UUID supplied to the launched CLI."},
+          "cwd": {"type": "string", "description": "Canonical directory used by the terminal host."},
+          "handoffId": {"type": "string"},
+          "terminal": {
+            "type": "object",
+            "required": ["host", "handle", "capabilities"],
+            "properties": {
+              "host": {"type": "string", "enum": ["stock", "term_mux"]},
+              "handle": {
+                "type": "object",
+                "properties": {
+                  "workspaceId": {"type": "string"},
+                  "surfaceId": {"type": "string"},
+                  "processId": {"type": "string"}
+                }
+              },
+              "capabilities": {"type": "array", "items": {"type": "string", "enum": ["status", "lifecycle_events", "stop"]}}
+            }
+          }
+        }
+      },
       "execution": {"type": "handler", "handler": "launch"}
     },
     {
       "name": "launch_worktree",
-      "description": "Create a validated Git worktree and launch a real Pi CLI session there. The worktree is retained on later failure.",
+      "description": "Create a new validated Git branch and linked worktree from the repository's current HEAD, verify both, then launch Pi in that exact worktree. Git state is retained and reported if launch later fails.",
       "effects": ["process_spawn", "file_write", "git_worktree"],
       "policy": {"confirmation": "required"},
-      "inputSchema": {"type": "object", "required": ["cwd", "branch"], "properties": {
-        "cwd": {"type": "string"}, "branch": {"type": "string"}, "destination": {"type": "string"}, "terminal": {"type": "string", "enum": ["stock", "term_mux"]},
-        "model": {"type": "string"}, "thinking": {"type": "string", "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"]}, "name": {"type": "string"}, "initialPrompt": {"type": "string"}, "handoff": {"type": "object"}
-      }},
-      "outputSchema": {"type": "object", "required": ["launchId", "state", "piSessionId", "worktreePath", "branch", "terminal"], "properties": {"launchId": {"type": "string"}, "state": {"type": "string"}, "piSessionId": {"type": "string"}, "worktreePath": {"type": "string"}, "branch": {"type": "string"}, "terminal": {"type": "object"}}},
+      "inputSchema": {
+        "type": "object",
+        "required": ["cwd", "branch"],
+        "properties": {
+          "cwd": {"type": "string", "description": "Existing absolute path anywhere inside a non-bare Git worktree."},
+          "branch": {"type": "string", "description": "New local branch validated by the package and git check-ref-format; existing branches are rejected."},
+          "destination": {"type": "string", "description": "Optional absolute path that must not exist. A collision-resistant default is selected when omitted."},
+          "terminal": {"type": "string", "enum": ["stock", "term_mux"], "description": "Terminal host override; it must be configured and available."},
+          "model": {"type": "string", "description": "Provider/model identifier permitted by package configuration."},
+          "thinking": {"type": "string", "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"], "description": "Thinking level permitted by package configuration."},
+          "name": {"type": "string", "description": "Optional non-empty session name using supported safe characters, at most 120 UTF-8 bytes."},
+          "initialPrompt": {"type": "string", "description": "Optional initial prompt, at most 16384 UTF-8 bytes and without control characters."},
+          "handoff": {
+            "type": "object",
+            "required": ["items"],
+            "description": "Optional bounded bundle of snapshot or reference handoffs; at most 20 items are accepted.",
+            "properties": {
+              "allowEffects": {"type": "boolean", "description": "Caller approval for effectful snapshots; deployment policy must also allow them."},
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["target", "as", "mode"],
+                  "properties": {
+                    "target": {"type": "string", "description": "Protocol target in node.provide form."},
+                    "input": {"description": "JSON-serializable input passed to or retained for the target."},
+                    "as": {"type": "string", "description": "Unique handoff alias."},
+                    "mode": {"type": "string", "enum": ["snapshot", "reference"]},
+                    "required": {"type": "boolean", "description": "Fail launch when this handoff cannot be prepared."}
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "required": ["version", "launchId", "ownerUid", "createdAt", "updatedAt", "state", "piSessionId", "cwd", "worktreePath", "branch", "terminal", "recovery"],
+        "properties": {
+          "version": {"type": "integer", "enum": [1]},
+          "launchId": {"type": "string", "description": "Durable UUID used by status and stop."},
+          "ownerUid": {"type": "integer"},
+          "createdAt": {"type": "string", "description": "ISO-8601 creation timestamp."},
+          "updatedAt": {"type": "string", "description": "ISO-8601 last-update timestamp."},
+          "state": {"type": "string", "enum": ["launched", "ready", "working", "idle", "ended"]},
+          "piSessionId": {"type": "string", "description": "Pi session UUID supplied to the launched CLI."},
+          "cwd": {"type": "string", "description": "Canonical verified worktree path used by the terminal host."},
+          "worktreePath": {"type": "string", "description": "Canonical verified linked-worktree root."},
+          "branch": {"type": "string", "description": "Verified checked-out local branch."},
+          "handoffId": {"type": "string"},
+          "terminal": {
+            "type": "object",
+            "required": ["host", "handle", "capabilities"],
+            "properties": {
+              "host": {"type": "string", "enum": ["stock", "term_mux"]},
+              "handle": {
+                "type": "object",
+                "properties": {
+                  "workspaceId": {"type": "string"},
+                  "surfaceId": {"type": "string"},
+                  "processId": {"type": "string"}
+                }
+              },
+              "capabilities": {"type": "array", "items": {"type": "string", "enum": ["status", "lifecycle_events", "stop"]}}
+            }
+          },
+          "recovery": {
+            "type": "object",
+            "required": ["worktreeCreated", "note"],
+            "properties": {
+              "worktreeCreated": {"type": "boolean"},
+              "note": {"type": "string"}
+            }
+          }
+        }
+      },
       "execution": {"type": "handler", "handler": "launch_worktree"}
     },
-    {"name": "status", "description": "Return the persisted launch record, latest explicit lifecycle event, and honest host status.", "inputSchema": {"type": "object", "required": ["launchId"], "properties": {"launchId": {"type": "string"}}}, "outputSchema": {"type": "object", "required": ["launchId", "state", "terminal", "hostStatus"], "properties": {"launchId": {"type": "string"}, "state": {"type": "string"}, "terminal": {"type": "object"}, "hostStatus": {}}}, "execution": {"type": "handler", "handler": "status"}},
-    {"name": "focus", "description": "Focus a verified host surface when supported.", "effects": ["terminal_control"], "policy": {"confirmation": "required"}, "inputSchema": {"type": "object", "required": ["launchId"], "properties": {"launchId": {"type": "string"}}}, "outputSchema": {"type": "object", "required": ["launchId", "ok"], "properties": {"launchId": {"type": "string"}, "ok": {"type": "boolean"}}}, "execution": {"type": "handler", "handler": "focus"}},
-    {"name": "send_input", "description": "Send literal input only when the selected host verifies input delivery.", "effects": ["terminal_control"], "policy": {"confirmation": "required"}, "inputSchema": {"type": "object", "required": ["launchId", "text"], "properties": {"launchId": {"type": "string"}, "text": {"type": "string"}}}, "outputSchema": {"type": "object", "required": ["launchId", "ok"], "properties": {"launchId": {"type": "string"}, "ok": {"type": "boolean"}}}, "execution": {"type": "handler", "handler": "send_input"}},
-    {"name": "stop", "description": "Request graceful Pi shutdown only when the selected host advertises verified stop control.", "effects": ["terminal_control"], "policy": {"confirmation": "required"}, "inputSchema": {"type": "object", "required": ["launchId"], "properties": {"launchId": {"type": "string"}}}, "outputSchema": {"type": "object", "required": ["launchId", "ok"], "properties": {"launchId": {"type": "string"}, "ok": {"type": "boolean"}}}, "execution": {"type": "handler", "handler": "stop"}}
+    {
+      "name": "status",
+      "description": "Return the complete persisted launch record and latest signed Pi lifecycle event. Terminal status degrades to a structured unavailable result without hiding recovery data.",
+      "inputSchema": {
+        "type": "object",
+        "required": ["launchId"],
+        "properties": {"launchId": {"type": "string", "description": "Launch UUID returned by launch or launch_worktree."}}
+      },
+      "outputSchema": {
+        "type": "object",
+        "required": ["version", "launchId", "ownerUid", "createdAt", "updatedAt", "state", "piSessionId", "cwd", "terminal", "hostStatus"],
+        "properties": {
+          "version": {"type": "integer", "enum": [1]},
+          "launchId": {"type": "string"},
+          "ownerUid": {"type": "integer"},
+          "createdAt": {"type": "string"},
+          "updatedAt": {"type": "string"},
+          "state": {"type": "string", "enum": ["launched", "ready", "working", "idle", "ended"]},
+          "piSessionId": {"type": "string"},
+          "cwd": {"type": "string"},
+          "branch": {"type": "string"},
+          "worktreePath": {"type": "string"},
+          "handoffId": {"type": "string"},
+          "terminal": {
+            "type": "object",
+            "required": ["host", "handle", "capabilities"],
+            "properties": {
+              "host": {"type": "string"},
+              "handle": {
+                "type": "object",
+                "properties": {
+                  "workspaceId": {"type": "string"},
+                  "surfaceId": {"type": "string"},
+                  "processId": {"type": "string"}
+                }
+              },
+              "capabilities": {"type": "array", "items": {"type": "string", "enum": ["status", "lifecycle_events", "stop"]}}
+            }
+          },
+          "lifecycle": {
+            "type": "object",
+            "required": ["state", "at"],
+            "properties": {
+              "state": {"type": "string", "enum": ["ready", "working", "idle", "ended"]},
+              "at": {"type": "string", "description": "ISO-8601 signed lifecycle-event timestamp."}
+            }
+          },
+          "recovery": {
+            "type": "object",
+            "required": ["worktreeCreated", "note"],
+            "properties": {
+              "worktreeCreated": {"type": "boolean"},
+              "note": {"type": "string"}
+            }
+          },
+          "hostStatus": {"description": "Host-specific status object, the string unknown, or a structured unavailable error."}
+        }
+      },
+      "execution": {"type": "handler", "handler": "status"}
+    },
+    {
+      "name": "stop",
+      "description": "Terminate the verified terminal surface for a launch when the selected host supports exact stop control. This does not remove any Git worktree.",
+      "effects": ["terminal_control"],
+      "policy": {"confirmation": "required"},
+      "inputSchema": {
+        "type": "object",
+        "required": ["launchId"],
+        "properties": {"launchId": {"type": "string", "description": "Launch UUID returned by launch or launch_worktree."}}
+      },
+      "outputSchema": {
+        "type": "object",
+        "required": ["launchId", "ok"],
+        "properties": {
+          "launchId": {"type": "string"},
+          "ok": {"type": "boolean", "enum": [true], "description": "True after the host stop request succeeds and persisted state is updated to ended."}
+        }
+      },
+      "execution": {"type": "handler", "handler": "stop"}
+    }
   ]
 }
