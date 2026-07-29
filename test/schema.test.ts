@@ -1,12 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { createProtocolFabric, registerProtocolManifest, type JsonSchemaLite, type PiProtocolManifest } from "@kybernetria/pi-protocol";
+import { createProtocolFabric } from "@kybernetria/pi-protocol/core";
+import { parseProtocolManifest } from "@kybernetria/pi-protocol/contract";
 
-const manifest = JSON.parse(
+const definition = parseProtocolManifest(
   await readFile(new URL("../pi.protocol.json", import.meta.url), "utf8"),
-) as PiProtocolManifest;
-
+  { allowLegacyV02: false },
+);
 const launchResult = {
   launched: true,
   piSessionId: "22222222-2222-4222-8222-222222222222",
@@ -14,59 +15,42 @@ const launchResult = {
 };
 
 function registeredFabric(handler: () => unknown = () => launchResult) {
-  const fabric = createProtocolFabric();
-  registerProtocolManifest(fabric, { manifest, handlers: { launch: handler } });
+  const fabric = createProtocolFabric({ confirmationBroker: { confirm: () => true } });
+  fabric.install(definition, { handlers: { launch: handler } });
   return fabric;
 }
 
-function assertSchemaLite(schema: JsonSchemaLite, path = "schema"): void {
-  const supported = new Set(["type", "required", "properties", "items", "enum", "description"]);
-  for (const key of Object.keys(schema)) assert.ok(supported.has(key), `${path}.${key} is not supported by JsonSchemaLite`);
-  for (const [key, child] of Object.entries(schema.properties ?? {})) assertSchemaLite(child, `${path}.properties.${key}`);
-  if (schema.items) assertSchemaLite(schema.items, `${path}.items`);
-}
-
-test("manifest exposes one handler-backed launch provide with supported schemas", () => {
-  assert.deepEqual(manifest.provides.map(provide => provide.name), ["launch"]);
-  assertSchemaLite(manifest.provides[0].inputSchema, "launch.inputSchema");
-  assertSchemaLite(manifest.provides[0].outputSchema, "launch.outputSchema");
+test("manifest exposes one canonical bounded launch contract", () => {
+  assert.equal(definition.sourceSchemaVersion, 1);
+  assert.equal(definition.manifest.node.id, "pi_full_session");
+  assert.deepEqual(definition.manifest.provides.map((provide) => provide.name), ["launch"]);
+  assert.equal(JSON.stringify(definition.manifest).includes("execution"), false);
+  assert.deepEqual(definition.manifest.provides[0].effects, ["process.spawn", "system.configure"]);
+  assert.deepEqual(Object.keys(definition.manifest.provides[0].inputSchema.properties ?? {}), ["cwd", "initialPrompt", "name"]);
   assert.doesNotThrow(() => registeredFabric());
 });
 
 test("representative launch input and output satisfy the schemas", async () => {
   const result = await registeredFabric().invoke({
-    nodeId: manifest.nodeId,
+    nodeId: "pi_full_session",
     provide: "launch",
-    input: {
-      cwd: "/repository",
-      model: "provider/model",
-      thinking: "high",
-      name: "schema audit",
-      initialPrompt: "Continue the audit",
-    },
+    input: { cwd: "/repository", name: "schema audit", initialPrompt: "Continue the audit" },
   });
   assert.equal(result.ok, true, result.ok ? undefined : result.error.message);
 });
 
-test("protocol validation rejects malformed input before the handler runs", async () => {
-  const missing = await registeredFabric().invoke({ nodeId: manifest.nodeId, provide: "launch", input: {} });
-  assert.equal(missing.ok, false);
-  if (!missing.ok) assert.equal(missing.error.message, "input.cwd is required");
-
-  const malformed = await registeredFabric().invoke({ nodeId: manifest.nodeId, provide: "launch", input: { cwd: 42 } });
-  assert.equal(malformed.ok, false);
-  if (!malformed.ok) assert.equal(malformed.error.message, "input.cwd must be string");
+test("canonical validation rejects malformed or deployment-authority input", async () => {
+  for (const input of [{}, { cwd: 42 }, { cwd: "/repository", model: "provider/model" }]) {
+    const result = await registeredFabric().invoke({ nodeId: "pi_full_session", provide: "launch", input });
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.error.code, "INPUT_INVALID");
+  }
 });
 
 test("output schema rejects incomplete launch results", async () => {
   const result = await registeredFabric(() => ({ launched: true, cwd: "/repository" })).invoke({
-    nodeId: manifest.nodeId,
-    provide: "launch",
-    input: { cwd: "/repository" },
+    nodeId: "pi_full_session", provide: "launch", input: { cwd: "/repository" },
   });
   assert.equal(result.ok, false);
-  if (!result.ok) {
-    assert.equal(result.error.code, "INVALID_OUTPUT");
-    assert.equal(result.error.message, "output.piSessionId is required");
-  }
+  if (!result.ok) assert.equal(result.error.code, "OUTPUT_INVALID");
 });

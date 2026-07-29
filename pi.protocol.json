@@ -1,37 +1,82 @@
 {
-  "protocolVersion": "0.2.0",
-  "nodeId": "pi_full_session",
-  "packageId": "@kybernetria/pi-full-session",
-  "version": "0.2.0",
-  "purpose": "Launch a real interactive Pi CLI/TUI process in a new tab of an existing Zellij session.",
-  "tags": ["pi", "terminal", "zellij"],
+  "$schema": "https://pi.dev/protocol/manifest-v1.schema.json",
+  "schemaVersion": 1,
+  "node": {
+    "id": "pi_full_session",
+    "purpose": "Launch a real interactive Pi CLI/TUI process in a new tab of an existing Zellij session.",
+    "tags": [
+      "pi",
+      "terminal",
+      "zellij"
+    ]
+  },
   "provides": [
     {
       "name": "launch",
       "description": "Launch a real interactive Pi CLI session in a new Zellij tab using an existing absolute directory. The launched conversation is not proxied, monitored, or controlled through the protocol.",
-      "effects": ["process_spawn"],
-      "policy": {"confirmation": "required"},
+      "effects": [
+        "process.spawn",
+        "system.configure"
+      ],
       "inputSchema": {
         "type": "object",
-        "required": ["cwd"],
+        "required": [
+          "cwd"
+        ],
         "properties": {
-          "cwd": {"type": "string", "description": "Existing absolute working directory; control characters are rejected."},
-          "model": {"type": "string", "description": "Optional provider/model identifier permitted by package configuration."},
-          "thinking": {"type": "string", "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"], "description": "Optional Pi thinking level permitted by package configuration."},
-          "name": {"type": "string", "description": "Optional non-empty Pi session and Zellij tab name using supported safe characters, at most 120 UTF-8 bytes, and not beginning with '-'."},
-          "initialPrompt": {"type": "string", "description": "Optional literal initial prompt, at most 16384 UTF-8 bytes, without control characters, and not beginning with '-' or '@'."}
-        }
+          "cwd": {
+            "type": "string",
+            "description": "Existing absolute working directory; control characters are rejected.",
+            "minLength": 1,
+            "maxLength": 8192
+          },
+          "name": {
+            "type": "string",
+            "description": "Optional non-empty Pi session and Zellij tab name using supported safe characters, at most 120 UTF-8 bytes, and not beginning with '-'.",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "initialPrompt": {
+            "type": "string",
+            "description": "Optional literal initial prompt, at most 16384 UTF-8 bytes, without control characters, and not beginning with '-' or '@'.",
+            "maxLength": 16384
+          }
+        },
+        "additionalProperties": false
       },
       "outputSchema": {
         "type": "object",
-        "required": ["launched", "piSessionId", "cwd"],
+        "required": [
+          "launched",
+          "piSessionId",
+          "cwd"
+        ],
         "properties": {
-          "launched": {"type": "boolean", "enum": [true]},
-          "piSessionId": {"type": "string", "description": "Pi session UUID supplied to the launched CLI."},
-          "cwd": {"type": "string", "description": "Canonical directory used for the launched process."}
-        }
+          "launched": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "piSessionId": {
+            "type": "string",
+            "description": "Pi session UUID supplied to the launched CLI.",
+            "maxLength": 8192
+          },
+          "cwd": {
+            "type": "string",
+            "description": "Canonical directory used for the launched process.",
+            "maxLength": 8192
+          }
+        },
+        "additionalProperties": false
       },
-      "execution": {"type": "handler", "handler": "launch"}
+      "traits": {
+        "determinism": "best_effort",
+        "replay": "unsafe",
+        "interaction": "request_response",
+        "cancellable": true
+      }
     }
   ]
 }

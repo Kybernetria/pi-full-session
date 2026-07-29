@@ -1,6 +1,6 @@
 # pi-full-session
 
-`@kybernetria/pi-full-session` is a Pi Protocol 0.2.0 node that launches a real interactive Pi CLI/TUI process in a new tab of an existing Zellij session.
+`@kybernetria/pi-full-session` is a canonical Pi Protocol schemaVersion 1 node that launches a real interactive Pi CLI/TUI process in a new tab of an existing Zellij session.
 
 It does not create an SDK agent, proxy or monitor the conversation, manage Git worktrees, discover sessions, or stop tabs or Pi processes. Konsole can host the Zellij client, but no new Konsole window is created for each launch.
 
@@ -10,11 +10,13 @@ It does not create an SDK agent, proxy or monitor the conversation, manage Git w
 
 ```json
 {
-  "cwd": "/absolute/project/path",
-  "model": "provider/model-id",
-  "thinking": "high",
-  "name": "Investigate failure",
-  "initialPrompt": "Inspect the failing tests"
+  "op": "call",
+  "target": "pi_full_session.launch",
+  "input": {
+    "cwd": "/absolute/project/path",
+    "name": "Investigate failure",
+    "initialPrompt": "Inspect the failing tests"
+  }
 }
 ```
 
@@ -28,7 +30,7 @@ Only `cwd` is required. `name`, when supplied, names both the Zellij tab and Pi 
 }
 ```
 
-The launch effect requires protocol confirmation.
+The contract declares `process.spawn` and `system.configure`, so launch requires approval from the host confirmation broker. Model input cannot self-confirm or choose model policy.
 
 ## Zellij launch
 
@@ -76,7 +78,7 @@ Optional settings:
 - `piCommand` and `zellijCommand` default to `pi` and `zellij`. Each must be an executable name found through an absolute `PATH` entry or an absolute path; relative paths are rejected. Both are resolved and checked before launch.
 - `zellijSession` explicitly targets a session and overrides the inherited session name.
 - `zellijTimeoutMs` controls how long to wait for the Zellij action acknowledgement (100–60000 ms).
-- `allowedModels` and `allowedThinking` optionally restrict launch inputs.
+- `allowedModels` and `allowedThinking` restrict trusted direct service calls. They are not public protocol input fields; protocol callers cannot choose deployment model policy.
 
 The obsolete `selectedHost`, `termMux`, and `terminalCommand` settings are rejected with migration errors. term-mux is not supported or referenced as a future backend.
 
@@ -89,6 +91,9 @@ An `initialPrompt` beginning with `-` or `@` is rejected because Pi would parse 
 ## Verification
 
 ```text
+npm run protocol:generate
+npm run protocol:check
 npm test
 npm run typecheck
+git diff --check
 ```

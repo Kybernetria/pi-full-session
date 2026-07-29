@@ -4,21 +4,28 @@
   "type": "module",
   "description": "Launch a real interactive Pi CLI session in a Zellij tab through pi-protocol.",
   "keywords": ["pi-package", "pi-protocol", "terminal", "zellij"],
-  "files": ["README.md", "extension.ts", "src", "pi.protocol.json"],
+  "files": ["README.md", "extension.ts", "src", "pi.protocol.json", "protocol.generated.ts"],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/**/*.test.ts"
+    "test": "tsx --test test/**/*.test.ts",
+    "protocol:check": "pi-protocol check .",
+    "protocol:generate": "pi-protocol generate ."
+  },
+  "piProtocol": {
+    "generated": "protocol.generated.ts"
+  },
+  "dependencies": {
+    "@kybernetria/pi-protocol": "file:../pi-protocol/packages/pi-protocol",
+    "ajv": "8.18.0"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.80.10",
-    "@kybernetria/pi-protocol": "^1.0.10"
+    "@earendil-works/pi-coding-agent": "^0.80.10"
   },
   "pi": {
     "extensions": ["./extension.ts"]
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.80.10",
-    "@kybernetria/pi-protocol": "^1.0.10",
     "@types/node": "^22.0.0",
     "tsx": "^4.20.0",
     "typescript": "^5.8.0"

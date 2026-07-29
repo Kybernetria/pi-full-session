@@ -3,17 +3,18 @@ import assert from "node:assert/strict";
 import { chmod, mkdtemp, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ensureProtocolFabric } from "@kybernetria/pi-protocol";
+import { ensureProtocolFabric } from "@kybernetria/pi-protocol/core";
 import extension from "../extension.ts";
 import { FullSessionService, loadConfig } from "../src/service.js";
 import { safeText, validateModel } from "../src/validation.js";
 
-test("extension registers only launch", () => {
-  extension({} as never);
-  assert.deepEqual(
-    ensureProtocolFabric().describeNode("pi_full_session")?.provides.map(provide => provide.name),
-    ["launch"],
-  );
+test("extension registers only launch with an owned lease", async () => {
+  let shutdown: (() => Promise<void>) | undefined;
+  extension({ on(name: string, callback: () => Promise<void>) { if (name === "session_shutdown") shutdown = callback; } } as never);
+  const fabric = ensureProtocolFabric();
+  assert.deepEqual(fabric.describeNode("pi_full_session")?.provides.map(provide => provide.name), ["launch"]);
+  assert.equal(fabric.diagnostics().registrations.find((item) => item.nodeId === "pi_full_session")?.owned, true);
+  await shutdown?.();
 });
 
 async function fixture() {
