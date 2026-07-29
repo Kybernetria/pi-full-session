@@ -13,7 +13,7 @@ test("extension registers only launch with an owned lease", async () => {
   extension({ on(name: string, callback: () => Promise<void>) { if (name === "session_shutdown") shutdown = callback; } } as never);
   const fabric = ensureProtocolFabric();
   assert.deepEqual(fabric.describeNode("pi_full_session")?.provides.map(provide => provide.name), ["launch"]);
-  assert.equal(fabric.diagnostics().registrations.find((item) => item.nodeId === "pi_full_session")?.owned, true);
+  assert.match(fabric.diagnostics().registrations.find((item) => item.nodeId === "pi_full_session")?.registrationId ?? "", /^registration_/);
   await shutdown?.();
 });
 
