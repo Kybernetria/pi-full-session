@@ -3,8 +3,19 @@
   "version": "0.2.0",
   "type": "module",
   "description": "Launch a real interactive Pi CLI session in a Zellij tab through pi-protocol.",
-  "keywords": ["pi-package", "pi-protocol", "terminal", "zellij"],
-  "files": ["README.md", "extension.ts", "src", "pi.protocol.json", "protocol.generated.ts"],
+  "keywords": [
+    "pi-package",
+    "pi-protocol",
+    "terminal",
+    "zellij"
+  ],
+  "files": [
+    "README.md",
+    "extension.ts",
+    "src",
+    "pi.protocol.json",
+    "protocol.generated.ts"
+  ],
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "tsx --test test/**/*.test.ts",
@@ -15,14 +26,15 @@
     "generated": "protocol.generated.ts"
   },
   "dependencies": {
-    "@kybernetria/pi-protocol": "file:../pi-protocol/packages/pi-protocol",
-    "ajv": "8.18.0"
+    "@kybernetria/pi-protocol": "https://github.com/Kybernetria/pi-protocol/releases/download/v2.0.0/kybernetria-pi-protocol-2.0.0.tgz"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "^0.80.10"
   },
   "pi": {
-    "extensions": ["./extension.ts"]
+    "extensions": [
+      "./extension.ts"
+    ]
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.80.10",
