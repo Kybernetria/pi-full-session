@@ -1,6 +1,23 @@
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { ensureProtocolFabric, registerProtocolManifest, type PiProtocolManifest } from "@kybernetria/pi-protocol";
+import { createProtocolNamespace, ensureProtocolFabric, parseProtocolManifest, registerProtocolManifest } from "@kybernetria/pi-protocol";
 import { FullSessionService, loadConfig } from "./src/service.js";
-const manifest=JSON.parse(readFileSync(new URL("./pi.protocol.json",import.meta.url),"utf8")) as PiProtocolManifest;
-export default function extension(_pi:ExtensionAPI){const fabric=ensureProtocolFabric();fabric.unregister("pi_full_session");const service=async()=>new FullSessionService(fabric,await loadConfig());registerProtocolManifest(fabric,{manifest,handlers:{launch:async i=>(await service()).launch(i),launch_worktree:async i=>(await service()).worktree(i),status:async i=>(await service()).status(i),stop:async i=>(await service()).stop(i)}})}
+
+const manifest = parseProtocolManifest(
+  readFileSync(fileURLToPath(new URL("./pi.protocol.json", import.meta.url)), "utf8"),
+);
+const protocol = createProtocolNamespace(manifest);
+const launchHandler = "launch";
+protocol.handler(launchHandler);
+
+export default function extension(_pi: ExtensionAPI): void {
+  const fabric = ensureProtocolFabric();
+  fabric.unregister(protocol.nodeId);
+  registerProtocolManifest(fabric, {
+    manifest,
+    handlers: {
+      [launchHandler]: async input => new FullSessionService(await loadConfig()).launch(input),
+    },
+  });
+}

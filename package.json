@@ -1,25 +1,24 @@
 {
   "name": "@kybernetria/pi-full-session",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
-  "description": "Launch durable Pi CLI sessions through pi-protocol terminal hosts.",
-  "keywords": ["pi-package", "pi-protocol", "terminal", "worktree"],
-  "files": ["README.md", "extension.ts", "extensions", "src", "pi.protocol.json"],
+  "description": "Launch a real interactive Pi CLI session in a Zellij tab through pi-protocol.",
+  "keywords": ["pi-package", "pi-protocol", "terminal", "zellij"],
+  "files": ["README.md", "extension.ts", "src", "pi.protocol.json"],
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "tsx --test test/**/*.test.ts"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "^0.80.10",
-    "@kybernetria/pi-protocol": "^1.0.1"
+    "@kybernetria/pi-protocol": "^1.0.10"
   },
   "pi": {
     "extensions": ["./extension.ts"]
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.80.10",
-    "@kybernetria/pi-protocol": "^1.0.1",
-    "@mariozechner/pi-ai": "^0.73.1",
+    "@kybernetria/pi-protocol": "^1.0.10",
     "@types/node": "^22.0.0",
     "tsx": "^4.20.0",
     "typescript": "^5.8.0"
