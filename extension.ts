@@ -7,7 +7,6 @@ import { FullSessionService, loadConfig } from "./src/service.js";
 
 const definition = parseProtocolManifest(
   readFileSync(fileURLToPath(new URL("./pi.protocol.json", import.meta.url)), "utf8"),
-  { allowLegacyV02: false },
 );
 const launchHandler = "launch";
 
