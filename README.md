@@ -20,7 +20,7 @@ It does not create an SDK agent, proxy or monitor the conversation, manage Git w
 }
 ```
 
-Only `cwd` is required. `name`, when supplied, names both the Zellij tab and Pi session. The result contains the canonical working directory and exact Pi session UUID supplied to the CLI:
+Only `cwd` is required. `name`, when supplied, names both the Zellij tab and Pi session. `initialPrompt` is limited to 16,384 UTF-8 bytes. Because JSON Schema `maxLength` counts Unicode code points rather than UTF-8 bytes, the provide advertises the `x-kyvernetria-utf8-limits` extension and the handler performs the exact byte check at the boundary before filesystem or process work. The result contains the canonical working directory and exact Pi session UUID supplied to the CLI:
 
 ```json
 {
@@ -31,6 +31,14 @@ Only `cwd` is required. `name`, when supplied, names both the Zellij tab and Pi 
 ```
 
 The contract declares `process.spawn` and `system.configure`, so launch requires approval from the host confirmation broker. Model input cannot self-confirm or choose model policy.
+
+The public prompt extension is:
+
+```json
+{"x-kyvernetria-utf8-limits":{"initialPrompt":{"maxBytes":16384,"encoding":"utf-8","enforcedAt":"protocol-boundary"}}}
+```
+
+The schema admits any string up to 16,384 Unicode code points and rejects C0 or DEL control characters. The runtime validator is authoritative for the exact 16,384-byte UTF-8 limit, including prompts containing 2-, 3-, or 4-byte characters, and rejects over-limit prompts before checking the directory or resolving executables.
 
 ## Zellij launch
 

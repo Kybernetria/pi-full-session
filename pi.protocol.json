@@ -38,8 +38,9 @@
           },
           "initialPrompt": {
             "type": "string",
-            "description": "Optional literal initial prompt, at most 16384 UTF-8 bytes, without control characters, and not beginning with '-' or '@'.",
-            "maxLength": 16384
+            "description": "Optional literal initial prompt, at most 16,384 UTF-8 bytes, without C0 or DEL control characters, and not beginning with '-' or '@'. JSON Schema maxLength counts Unicode code points rather than UTF-8 bytes; the handler enforces the exact byte limit before launch.",
+            "maxLength": 16384,
+            "pattern": "^[^\\u0000-\\u001F\\u007F]*$"
           }
         },
         "additionalProperties": false
@@ -76,6 +77,15 @@
         "replay": "unsafe",
         "interaction": "request_response",
         "cancellable": true
+      },
+      "extensions": {
+        "x-kyvernetria-utf8-limits": {
+          "initialPrompt": {
+            "maxBytes": 16384,
+            "encoding": "utf-8",
+            "enforcedAt": "protocol-boundary"
+          }
+        }
       }
     }
   ]
