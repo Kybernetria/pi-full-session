@@ -4,7 +4,7 @@ import { access, open, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, isAbsolute, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
-import { absoluteDir, safeName, safeText, validateModel, validateThinking } from "./validation.js";
+import { absoluteDir, validateLaunchInput } from "./validation.js";
 
 export type AppConfig = {
   piCommand?: string;
@@ -66,20 +66,9 @@ export class FullSessionService {
   ) {}
 
   async launch(input: unknown): Promise<LaunchResult> {
-    if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("launch input must be an object");
-    const request = input as Record<string, unknown>;
-    const supported = new Set(["cwd", "model", "thinking", "name", "initialPrompt"]);
-    for (const key of Object.keys(request)) {
-      if (!supported.has(key)) throw new Error(`unsupported launch input: ${key}`);
-    }
-    const cwd = await existingDirectory(absoluteDir(request.cwd));
-    const model = validateModel(request.model, this.config.allowedModels);
-    const thinking = validateThinking(request.thinking, this.config.allowedThinking);
-    const name = safeName(request.name);
-    const prompt = safeText(request.initialPrompt, "initialPrompt");
-    if (prompt && /^[\-@]/.test(prompt)) {
-      throw new Error("initialPrompt must not begin with '-' or '@' because Pi would parse it as a CLI option or file argument");
-    }
+    const request = validateLaunchInput(input, this.config.allowedModels, this.config.allowedThinking);
+    const cwd = await existingDirectory(request.cwd);
+    const { model, thinking, name, initialPrompt: prompt } = request;
     const configuredPiCommand = validateCommand(this.config.piCommand ?? "pi", "piCommand")!;
     const configuredZellijCommand = validateCommand(this.config.zellijCommand ?? "zellij", "zellijCommand")!;
     const configuredSession = validateSessionName(this.config.zellijSession, "zellijSession");

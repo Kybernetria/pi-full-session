@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { createProtocolFabric } from "@kybernetria/pi-protocol/core";
 import { parseProtocolManifest } from "@kybernetria/pi-protocol/contract";
+import { validateLaunchInput } from "../src/validation.js";
 
 const definition = parseProtocolManifest(
   await readFile(new URL("../pi.protocol.json", import.meta.url), "utf8"),
@@ -29,6 +30,11 @@ test("manifest exposes one canonical bounded launch contract", () => {
   assert.equal(JSON.stringify(definition.manifest).includes("execution"), false);
   assert.deepEqual(definition.manifest.provides[0].effects, ["process.spawn", "system.configure"]);
   assert.deepEqual(Object.keys(definition.manifest.provides[0].inputSchema.properties ?? {}), ["cwd", "initialPrompt", "name"]);
+  assert.deepEqual(definition.manifest.provides[0].extensions, {
+    "x-kyvernetria-utf8-limits": {
+      initialPrompt: { maxBytes: 16384, encoding: "utf-8", enforcedAt: "protocol-boundary" },
+    },
+  });
   assert.doesNotThrow(() => registeredFabric());
 });
 
@@ -47,6 +53,30 @@ test("canonical validation rejects malformed or deployment-authority input", asy
     assert.equal(result.ok, false);
     if (!result.ok) assert.equal(result.error.code, "INPUT_INVALID");
   }
+});
+
+test("schema admits the complete UTF-8 byte-valid prompt domain", async () => {
+  const prompts = [
+    "a".repeat(16_384),
+    "é".repeat(8_192),
+    "€".repeat(5_461) + "a",
+    "😀".repeat(4_096),
+  ];
+  for (const initialPrompt of prompts) {
+    assert.equal(Buffer.byteLength(initialPrompt, "utf8") <= 16_384, true);
+    assert.equal(definition.provides.launch.validateInput({ cwd: "/repository", initialPrompt }).valid, true);
+  }
+
+  for (const initialPrompt of ["é\u0001mixed", "€\u001fmixed", "😀\u007fmixed"]) {
+    assert.equal(definition.provides.launch.validateInput({ cwd: "/repository", initialPrompt }).valid, false);
+  }
+
+  const overBytePrompt = "😀".repeat(4_097);
+  assert.equal(definition.provides.launch.validateInput({ cwd: "/repository", initialPrompt: overBytePrompt }).valid, true);
+  assert.throws(
+    () => validateLaunchInput({ cwd: "/repository", initialPrompt: overBytePrompt }),
+    /initialPrompt must be text up to 16384 UTF-8 bytes/,
+  );
 });
 
 test("output schema rejects incomplete launch results", async () => {

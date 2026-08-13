@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { ensureProtocolFabric } from "@kybernetria/pi-protocol/core";
 import extension from "../extension.ts";
 import { FullSessionService, loadConfig } from "../src/service.js";
-import { safeText, validateModel } from "../src/validation.js";
+import { MAX_INITIAL_PROMPT_UTF8_BYTES, safeText, validateLaunchInput, validateModel } from "../src/validation.js";
 
 test("extension registers only launch with an owned lease", async () => {
   let shutdown: (() => Promise<void>) | undefined;
@@ -67,6 +67,24 @@ test("launch opens a named Zellij tab with Pi and validated arguments", async ()
   });
 });
 
+test("launch accepts exact 16,384-byte prompts with 2-, 3-, and 4-byte characters", async () => {
+  const { root, cwd, pi } = await fixture();
+  const zellij = join(root, "zellij.cjs");
+  await executable(zellij, "process.exitCode = 0;");
+  const service = new FullSessionService(
+    { piCommand: pi, zellijCommand: zellij, zellijSession: "test" },
+    process.env,
+  );
+  for (const initialPrompt of [
+    "é".repeat(8_192),
+    "€".repeat(5_461) + "a",
+    "😀".repeat(4_096),
+  ]) {
+    assert.equal(Buffer.byteLength(initialPrompt, "utf8"), MAX_INITIAL_PROMPT_UTF8_BYTES);
+    assert.equal((await service.launch({ cwd, initialPrompt })).launched, true);
+  }
+});
+
 test("configured Zellij session overrides the ambient session", async () => {
   const { root, cwd, pi } = await fixture();
   const zellij = join(root, "zellij.cjs");
@@ -123,6 +141,21 @@ test("launch rejects disallowed values and a missing Pi executable", async () =>
   );
   assert.throws(() => validateModel("bad;rm", undefined));
   assert.throws(() => safeText("😀😀", "tiny", 7), /UTF-8 bytes/);
+  for (const initialPrompt of ["é\u0001mixed", "€\u001fmixed", "😀\u007fmixed"]) {
+    assert.throws(
+      () => validateLaunchInput({ cwd, initialPrompt }),
+      new RegExp(`initialPrompt must be text up to ${MAX_INITIAL_PROMPT_UTF8_BYTES} UTF-8 bytes`),
+    );
+  }
+  for (const initialPrompt of ["é".repeat(8_192), "€".repeat(5_461) + "a"]) {
+    assert.equal(Buffer.byteLength(initialPrompt, "utf8"), MAX_INITIAL_PROMPT_UTF8_BYTES);
+    assert.equal(validateLaunchInput({ cwd, initialPrompt }).initialPrompt, initialPrompt);
+  }
+  assert.equal(validateLaunchInput({ cwd, initialPrompt: "😀".repeat(4_096) }).initialPrompt?.length, 8_192);
+  assert.throws(
+    () => validateLaunchInput({ cwd, initialPrompt: "😀".repeat(4_097) }),
+    new RegExp(`initialPrompt must be text up to ${MAX_INITIAL_PROMPT_UTF8_BYTES} UTF-8 bytes`),
+  );
 });
 
 test("obsolete and oversized configuration gets an actionable error", async () => {

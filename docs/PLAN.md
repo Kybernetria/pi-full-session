@@ -8,7 +8,7 @@ Launch a durable, interactive Pi CLI/TUI process in a new tab of an existing Zel
 
 The node exposes only `launch`.
 
-`launch` validates an existing absolute working directory and optional Pi model, thinking level, name, and initial prompt. It resolves and checks the Pi executable, creates a Zellij tab in the configured or inherited session, runs Pi there with direct argv, and returns the canonical directory and generated Pi session UUID.
+`launch` validates an existing absolute working directory and optional Pi model, thinking level, name, and initial prompt. Initial prompts are bounded at 16,384 UTF-8 bytes by the canonical pre-handler validator; the manifest records this byte constraint in its `x-kyvernetria-utf8-limits` extension because JSON Schema `maxLength` counts Unicode code points rather than bytes. The schema rejects C0 and DEL controls while the handler performs the exact byte check before launch. It resolves and checks the Pi executable, creates a Zellij tab in the configured or inherited session, runs Pi there with direct argv, and returns the canonical directory and generated Pi session UUID.
 
 A supplied name is used independently for both the Zellij tab and Pi session. The protocol output intentionally does not expose lifecycle controls or promise that Pi remains running after Zellij accepts the tab.
 
