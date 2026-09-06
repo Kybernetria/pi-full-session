@@ -14,15 +14,29 @@ It does not create an SDK agent, proxy or monitor the conversation, manage Git w
 }
 ```
 
-Only `cwd` is required. `name`, when supplied, names both the Zellij tab and Pi session. The tool returns the canonical working directory and exact Pi session UUID supplied to the CLI:
+Only `cwd` is required. `name`, when supplied, names both the Zellij tab and Pi session. The tool returns a clear launch receipt containing the canonical working directory, exact Pi session UUID supplied to the CLI, and bounded provenance:
 
 ```json
 {
   "launched": true,
   "piSessionId": "...",
-  "cwd": "/absolute/project/path"
+  "cwd": "/absolute/project/path",
+  "provenance": {
+    "schemaVersion": 1,
+    "launchId": "...",
+    "launchedAt": "2026-09-06T12:00:00.000Z",
+    "piSessionId": "...",
+    "cwd": "/absolute/project/path",
+    "zellijSession": "...",
+    "originatingSessionId": "...",
+    "originatingSessionFile": "...",
+    "originatingParentSessionFile": "...",
+    "originatingToolCallId": "..."
+  }
 }
 ```
+
+After a successful launch, the parent session records the same receipt as the non-context `pi-full-session.launch` custom entry. The child receives only bounded environment metadata and records that handoff in its own session once. These records are provenance, not a launch registry, monitor, or control channel; a receipt persistence failure does not turn an acknowledged launch into a failed launch.
 
 The tool performs process and system configuration effects. Model input cannot self-confirm or choose model policy.
 
@@ -36,7 +50,7 @@ zellij --session <SESSION> action new-tab \
   pi --session-id <UUID> [--name NAME] [--model MODEL] [--thinking LEVEL] [initial prompt]
 ```
 
-No shell command string is constructed. Zellij runs Pi as the tab's process. The tab closes when Pi exits.
+No shell command string is constructed. On POSIX, the tab command is a direct `env KEY=value ... pi ...` argv so provenance reaches the Zellij server's child even when the server predates this launcher; Windows uses the inherited process environment. Zellij runs Pi as the tab's process, and the tab closes when Pi exits. The child receives provenance through direct environment variables, not through a prompt.
 
 The target session is selected as follows:
 
@@ -78,7 +92,7 @@ The obsolete `selectedHost`, `termMux`, and `terminalCommand` settings are rejec
 
 ## Failure semantics
 
-The tool returns `launched: true` only after the Pi executable passes preflight and the Zellij action client exits successfully. Missing executables, nonexistent sessions, nonzero action exits, and timeouts are returned to the caller. Action success acknowledges tab creation; it does not guarantee that Pi remains healthy afterward. A timeout is reported as ambiguous because Zellij may have accepted the tab immediately before the client was killed; the launcher never retries automatically.
+The tool returns `launched: true` only after the Pi executable passes preflight and the Zellij action client exits successfully. Missing executables, nonexistent sessions, nonzero action exits, and timeouts are returned to the caller. Action success acknowledges tab creation; it does not guarantee that Pi remains healthy afterward. A timeout is reported as ambiguous because Zellij may have accepted the tab immediately before the client was killed; the launcher never retries automatically. The parent and child provenance entries are best-effort persistence records and do not change that launch-only result.
 
 An `initialPrompt` beginning with `-` or `@` is rejected because Pi would parse it as a CLI option or local file argument rather than a literal message. Names and Zellij session names beginning with `-` are also rejected so they cannot cross an option-parser boundary.
 

@@ -5,6 +5,12 @@ import { homedir } from "node:os";
 import { delimiter, isAbsolute, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { absoluteDir, safeName, safeText, validateModel, validateThinking } from "./validation.js";
+import {
+  type LaunchOrigin,
+  type LaunchProvenance,
+  launchProvenanceEnvironmentArguments,
+  validateLaunchOrigin,
+} from "./provenance.js";
 
 export type AppConfig = {
   piCommand?: string;
@@ -22,6 +28,7 @@ export type LaunchResult = {
   launched: true;
   piSessionId: string;
   cwd: string;
+  provenance: LaunchProvenance;
 };
 
 export async function loadConfig(
@@ -65,7 +72,7 @@ export class FullSessionService {
     private readonly environment: NodeJS.ProcessEnv = process.env,
   ) {}
 
-  async launch(input: unknown, signal?: AbortSignal): Promise<LaunchResult> {
+  async launch(input: unknown, signal?: AbortSignal, origin?: LaunchOrigin): Promise<LaunchResult> {
     if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("launch input must be an object");
     const request = input as Record<string, unknown>;
     const supported = new Set(["cwd", "model", "thinking", "name", "initialPrompt"]);
@@ -94,9 +101,29 @@ export class FullSessionService {
       resolveExecutable(configuredPiCommand, this.environment, "piCommand"),
       resolveExecutable(configuredZellijCommand, this.environment, "zellijCommand"),
     ]);
+    const envCommand = process.platform === "win32"
+      ? undefined
+      : await resolveExecutable(
+        "env",
+        { PATH: this.environment.PATH ?? process.env.PATH },
+        "provenance environment command",
+      );
     if (signal?.aborted) throw abortError();
 
+    const validatedOrigin = validateLaunchOrigin(origin);
     const piSessionId = randomUUID();
+    const provenance: LaunchProvenance = {
+      schemaVersion: 1,
+      launchId: randomUUID(),
+      launchedAt: new Date().toISOString(),
+      piSessionId,
+      cwd,
+      zellijSession,
+      originatingSessionId: validatedOrigin?.originatingSessionId ?? "unavailable",
+      ...(validatedOrigin?.originatingSessionFile ? { originatingSessionFile: validatedOrigin.originatingSessionFile } : {}),
+      ...(validatedOrigin?.originatingParentSessionFile ? { originatingParentSessionFile: validatedOrigin.originatingParentSessionFile } : {}),
+      ...(validatedOrigin?.originatingToolCallId ? { originatingToolCallId: validatedOrigin.originatingToolCallId } : {}),
+    };
     const piArgv = [
       "--session-id", piSessionId,
       ...(name ? ["--name", name] : []),
@@ -110,7 +137,9 @@ export class FullSessionService {
       "--cwd", cwd,
       ...(name ? ["--name", name] : []),
       "--close-on-exit",
-      "--", piCommand, ...piArgv,
+      "--",
+      ...(envCommand ? [envCommand, ...launchProvenanceEnvironmentArguments(provenance)] : []),
+      piCommand, ...piArgv,
     ];
 
     await runZellij(zellijCommand, zellijArgv, cwd, this.environment, validateTimeout(this.config.zellijTimeoutMs), signal)
@@ -119,7 +148,7 @@ export class FullSessionService {
         throw new Error(`Zellij failed to launch Pi session ${piSessionId}: ${errorMessage(error)}`);
       });
 
-    return { launched: true, piSessionId, cwd };
+    return { launched: true, piSessionId, cwd, provenance };
   }
 }
 

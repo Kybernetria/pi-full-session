@@ -5,12 +5,99 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import extension from "../extension.ts";
 import { FullSessionService, loadConfig } from "../src/service.js";
+import {
+  readInheritedLaunchProvenance,
+  withLaunchProvenanceEnvironment,
+} from "../src/provenance.js";
+import { createLaunchTool } from "../src/tools.js";
 import { safeText, validateModel } from "../src/validation.js";
 
 test("extension registers the ordinary launch tool", () => {
   const registered: string[] = [];
-  extension({ registerTool(definition: { name: string }) { registered.push(definition.name); } } as never);
+  extension({
+    registerTool(definition: { name: string }) { registered.push(definition.name); },
+    on() { return undefined; },
+  } as never);
   assert.deepEqual(registered, ["pi_full_session_launch"]);
+});
+
+test("child session records inherited provenance once without adding conversation content", async () => {
+  let sessionStart: ((event: unknown, ctx: unknown) => void) | undefined;
+  const appended: Array<{ type: string; data: unknown }> = [];
+  extension({
+    registerTool() { return undefined; },
+    on(event: string, handler: (event: unknown, ctx: unknown) => void) {
+      if (event === "session_start") sessionStart = handler;
+    },
+    appendEntry(type: string, data: unknown) { appended.push({ type, data }); },
+  } as never);
+  assert.ok(sessionStart);
+
+  const provenance = {
+    schemaVersion: 1 as const,
+    launchId: "launch-id",
+    launchedAt: "2026-09-06T12:00:00.000Z",
+    piSessionId: "pi-session-id",
+    cwd: "/project",
+    zellijSession: "zellij-session",
+    originatingSessionId: "parent-session-id",
+    originatingSessionFile: "/sessions/parent.jsonl",
+    originatingToolCallId: "call-id",
+  };
+  const inheritedEnvironment = withLaunchProvenanceEnvironment({}, provenance);
+  const keys = [
+    "PI_FULL_SESSION_LAUNCH_ID",
+    "PI_FULL_SESSION_LAUNCHED_AT",
+    "PI_FULL_SESSION_PI_SESSION_ID",
+    "PI_FULL_SESSION_CWD",
+    "PI_FULL_SESSION_ZELLIJ_SESSION",
+    "PI_FULL_SESSION_ORIGINATING_SESSION_ID",
+    "PI_FULL_SESSION_ORIGINATING_SESSION_FILE",
+    "PI_FULL_SESSION_ORIGINATING_TOOL_CALL_ID",
+  ] as const;
+  const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  try {
+    for (const key of keys) {
+      if (inheritedEnvironment[key] === undefined) delete process.env[key];
+      else process.env[key] = inheritedEnvironment[key];
+    }
+    const ctx = {
+      sessionManager: {
+        getEntries: () => [],
+        getSessionId: () => "child-session-id",
+        getSessionFile: () => "/sessions/child.jsonl",
+      },
+    };
+    await sessionStart!({}, ctx);
+    assert.equal(appended.length, 1);
+    assert.equal(appended[0].type, "pi-full-session.launch");
+    assert.deepEqual(appended[0].data, {
+      ...provenance,
+      childSessionId: "child-session-id",
+      childSessionFile: "/sessions/child.jsonl",
+      recordedAt: (appended[0].data as { recordedAt: string }).recordedAt,
+    });
+
+    appended.length = 0;
+    const duplicateCtx = {
+      sessionManager: {
+        getEntries: () => [{
+          type: "custom",
+          customType: "pi-full-session.launch",
+          data: { launchId: provenance.launchId },
+        }],
+        getSessionId: () => "child-session-id",
+        getSessionFile: () => "/sessions/child.jsonl",
+      },
+    };
+    await sessionStart!({}, duplicateCtx);
+    assert.deepEqual(appended, []);
+  } finally {
+    for (const key of keys) {
+      if (previous[key] === undefined) delete process.env[key];
+      else process.env[key] = previous[key];
+    }
+  }
 });
 
 async function fixture() {
@@ -37,12 +124,49 @@ async function fileExists(path: string): Promise<boolean> {
   }
 }
 
+test("tool returns a clear parent launch receipt and keeps launch success when receipt persistence fails", async () => {
+  const { root, cwd, pi } = await fixture();
+  const zellij = join(root, "receipt-zellij.cjs");
+  await executable(zellij, "process.exitCode = 0;");
+  const config = join(root, "config.json");
+  await writeFile(config, JSON.stringify({ piCommand: pi, zellijCommand: zellij, zellijSession: "test" }));
+
+  const previousConfig = process.env.PI_FULL_SESSION_CONFIG;
+  process.env.PI_FULL_SESSION_CONFIG = config;
+  try {
+    let appended: unknown;
+    const tool = createLaunchTool({
+      appendEntry(_type: string, data: unknown) { appended = data; throw new Error("session is read-only"); },
+    } as never);
+    const result = await tool.execute("tool-call-id", { cwd }, undefined, undefined, {
+      sessionManager: {
+        getSessionId: () => "parent-session-id",
+        getSessionFile: () => "/sessions/parent.jsonl",
+        getHeader: () => ({ parentSession: "/sessions/root.jsonl" }),
+      },
+    } as never);
+    assert.equal(result.details?.launched, true);
+    assert.equal((result.details as { provenance: { originatingSessionId: string } }).provenance.originatingSessionId, "parent-session-id");
+    assert.equal((appended as { originatingToolCallId: string }).originatingToolCallId, "tool-call-id");
+    assert.match(result.content[0].type === "text" ? result.content[0].text : "", /\"launchId\"/);
+  } finally {
+    if (previousConfig === undefined) delete process.env.PI_FULL_SESSION_CONFIG;
+    else process.env.PI_FULL_SESSION_CONFIG = previousConfig;
+  }
+});
+
 test("launch opens a named Zellij tab with Pi and validated arguments", async () => {
   const { root, cwd, pi } = await fixture();
   const zellij = join(root, "zellij.cjs");
   const output = join(root, "output.json");
-  await executable(zellij, `require("node:fs").writeFileSync(${JSON.stringify(output)}, JSON.stringify({cwd:process.cwd(),argv:process.argv.slice(2)})); process.stdout.write("17\\n");`);
+  await executable(zellij, `require("node:fs").writeFileSync(${JSON.stringify(output)}, JSON.stringify({cwd:process.cwd(),argv:process.argv.slice(2),env:{launchId:process.env.PI_FULL_SESSION_LAUNCH_ID,piSessionId:process.env.PI_FULL_SESSION_PI_SESSION_ID,parentSessionId:process.env.PI_FULL_SESSION_ORIGINATING_SESSION_ID,parentToolCallId:process.env.PI_FULL_SESSION_ORIGINATING_TOOL_CALL_ID}})); process.stdout.write("17\\n");`);
 
+  const origin = {
+    originatingSessionId: "parent-session-id",
+    originatingSessionFile: "/sessions/parent.jsonl",
+    originatingParentSessionFile: "/sessions/root.jsonl",
+    originatingToolCallId: "call-parent-1",
+  };
   const service = new FullSessionService({
     piCommand: pi,
     zellijCommand: zellij,
@@ -55,22 +179,52 @@ test("launch opens a named Zellij tab with Pi and validated arguments", async ()
     thinking: "high",
     name: "test session",
     initialPrompt: "hello; this is not shell",
-  });
+  }, undefined, origin);
 
   const canonicalCwd = await realpath(cwd);
   assert.equal(result.launched, true);
   assert.equal(result.cwd, canonicalCwd);
   assert.match(result.piSessionId, /^[0-9a-f-]{36}$/i);
-  assert.deepEqual(JSON.parse(await readFile(output, "utf8")), {
+  assert.match(result.provenance.launchId, /^[0-9a-f-]{36}$/i);
+  assert.match(result.provenance.launchedAt, /^20\d{2}-\d{2}-\d{2}T/);
+  assert.deepEqual({
+    ...result.provenance,
+    launchedAt: undefined,
+  }, {
+    schemaVersion: 1,
+    launchId: result.provenance.launchId,
+    launchedAt: undefined,
+    piSessionId: result.piSessionId,
     cwd: canonicalCwd,
-    argv: [
-      "--session", "test-zellij", "action", "new-tab",
-      "--cwd", canonicalCwd, "--name", "test session", "--close-on-exit", "--",
-      pi, "--session-id", result.piSessionId,
-      "--name", "test session", "--model", "provider/model",
-      "--thinking", "high", "hello; this is not shell",
-    ],
+    zellijSession: "test-zellij",
+    ...origin,
   });
+  const observed = JSON.parse(await readFile(output, "utf8")) as { cwd: string; argv: string[] };
+  assert.equal(observed.cwd, canonicalCwd);
+  const prefix = [
+    "--session", "test-zellij", "action", "new-tab",
+    "--cwd", canonicalCwd, "--name", "test session", "--close-on-exit", "--",
+  ];
+  assert.deepEqual(observed.argv.slice(0, prefix.length), prefix);
+  if (process.platform !== "win32") {
+    assert.match(observed.argv[prefix.length], /^\//);
+    assert.deepEqual(observed.argv.slice(prefix.length + 1, observed.argv.indexOf(pi)), [
+      `PI_FULL_SESSION_LAUNCH_ID=${result.provenance.launchId}`,
+      `PI_FULL_SESSION_LAUNCHED_AT=${result.provenance.launchedAt}`,
+      `PI_FULL_SESSION_PI_SESSION_ID=${result.piSessionId}`,
+      `PI_FULL_SESSION_CWD=${canonicalCwd}`,
+      "PI_FULL_SESSION_ZELLIJ_SESSION=test-zellij",
+      `PI_FULL_SESSION_ORIGINATING_SESSION_ID=${origin.originatingSessionId}`,
+      `PI_FULL_SESSION_ORIGINATING_SESSION_FILE=${origin.originatingSessionFile}`,
+      `PI_FULL_SESSION_ORIGINATING_PARENT_SESSION_FILE=${origin.originatingParentSessionFile}`,
+      `PI_FULL_SESSION_ORIGINATING_TOOL_CALL_ID=${origin.originatingToolCallId}`,
+    ]);
+  }
+  assert.deepEqual(observed.argv.slice(observed.argv.indexOf(pi)), [
+    pi, "--session-id", result.piSessionId,
+    "--name", "test session", "--model", "provider/model",
+    "--thinking", "high", "hello; this is not shell",
+  ]);
 });
 
 test("configured Zellij session overrides the ambient session", async () => {
