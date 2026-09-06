@@ -1,58 +1,30 @@
-async function invokeResult(fabric: { invokeTracked(request: any): Promise<any> }, request: any): Promise<any> {
-  return (await fabric.invokeTracked(request)).result;
-}
-
-import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
-import { createProtocolFabric } from "@kybernetria/pi-protocol/core";
-import { parseProtocolManifest } from "@kybernetria/pi-protocol/contract";
+import test from "node:test";
+import { Value } from "typebox/value";
+import { launchParameters, launchTool, registerFullSessionTools } from "../src/tools.ts";
 
-const definition = parseProtocolManifest(
-  await readFile(new URL("../pi.protocol.json", import.meta.url), "utf8"),
-);
-const launchResult = {
-  launched: true,
-  piSessionId: "22222222-2222-4222-8222-222222222222",
-  cwd: "/repository",
-};
+test("ordinary tool exposes the bounded launch contract and prompt guidance", () => {
+  assert.equal(launchTool.name, "pi_full_session_launch");
+  assert.match(launchTool.promptSnippet ?? "", /cwd/);
+  assert.equal(launchTool.promptGuidelines?.length, 2);
+  assert.deepEqual(Object.keys(launchParameters.properties), ["cwd", "name", "initialPrompt"]);
 
-function registeredFabric(handler: () => unknown = () => launchResult) {
-  const fabric = createProtocolFabric({ confirmationBroker: { confirm: () => true } });
-  fabric.install(definition, { handlers: { launch: handler } });
-  return fabric;
-}
-
-test("manifest exposes one canonical bounded launch contract", () => {
-  assert.equal(definition.manifest.node.id, "pi_full_session");
-  assert.deepEqual(definition.manifest.provides.map((provide) => provide.name), ["launch"]);
-  assert.equal(JSON.stringify(definition.manifest).includes("execution"), false);
-  assert.deepEqual(definition.manifest.provides[0].effects, ["process.spawn", "system.configure"]);
-  assert.deepEqual(Object.keys(definition.manifest.provides[0].inputSchema.properties ?? {}), ["cwd", "initialPrompt", "name"]);
-  assert.doesNotThrow(() => registeredFabric());
+  const registered: unknown[] = [];
+  registerFullSessionTools({ registerTool: (definition: unknown) => registered.push(definition) } as never);
+  assert.deepEqual((registered as Array<{ name: string }>).map((tool) => tool.name), ["pi_full_session_launch"]);
 });
 
-test("representative launch input and output satisfy the schemas", async () => {
-  const result = await invokeResult(registeredFabric(), {
-    nodeId: "pi_full_session",
-    provide: "launch",
-    input: { cwd: "/repository", name: "schema audit", initialPrompt: "Continue the audit" },
-  });
-  assert.equal(result.ok, true, result.ok ? undefined : result.error.message);
-});
-
-test("canonical validation rejects malformed or deployment-authority input", async () => {
-  for (const input of [{}, { cwd: 42 }, { cwd: "/repository", model: "provider/model" }]) {
-    const result = await invokeResult(registeredFabric(), { nodeId: "pi_full_session", provide: "launch", input });
-    assert.equal(result.ok, false);
-    if (!result.ok) assert.equal(result.error.code, "INPUT_INVALID");
+test("native Pi schema rejects malformed or deployment-authority input", () => {
+  for (const input of [
+    {},
+    { cwd: 42 },
+    { cwd: "relative/project" },
+    { cwd: "C:relative\\project" },
+    { cwd: "/repository", model: "provider/model" },
+    { cwd: "/repository", initialPrompt: "--help" },
+    { cwd: "/repository", name: "--help" },
+    { cwd: "/repository", unexpected: true },
+  ]) {
+    assert.equal(Value.Check(launchParameters, input), false);
   }
-});
-
-test("output schema rejects incomplete launch results", async () => {
-  const result = await invokeResult(registeredFabric(() => ({ launched: true, cwd: "/repository" })), {
-    nodeId: "pi_full_session", provide: "launch", input: { cwd: "/repository" },
-  });
-  assert.equal(result.ok, false);
-  if (!result.ok) assert.equal(result.error.code, "OUTPUT_INVALID");
 });

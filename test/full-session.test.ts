@@ -3,18 +3,14 @@ import assert from "node:assert/strict";
 import { chmod, mkdtemp, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ensureProtocolFabric } from "@kybernetria/pi-protocol/core";
 import extension from "../extension.ts";
 import { FullSessionService, loadConfig } from "../src/service.js";
 import { safeText, validateModel } from "../src/validation.js";
 
-test("extension registers only launch with an owned lease", async () => {
-  let shutdown: (() => Promise<void>) | undefined;
-  extension({ on(name: string, callback: () => Promise<void>) { if (name === "session_shutdown") shutdown = callback; } } as never);
-  const fabric = ensureProtocolFabric();
-  assert.deepEqual(fabric.describeNode("pi_full_session")?.provides.map(provide => provide.name), ["launch"]);
-  assert.match(fabric.diagnostics().registrations.find((item) => item.nodeId === "pi_full_session")?.registrationId ?? "", /^registration_/);
-  await shutdown?.();
+test("extension registers the ordinary launch tool", () => {
+  const registered: string[] = [];
+  extension({ registerTool(definition: { name: string }) { registered.push(definition.name); } } as never);
+  assert.deepEqual(registered, ["pi_full_session_launch"]);
 });
 
 async function fixture() {
@@ -29,6 +25,16 @@ async function fixture() {
 async function executable(path: string, source: string): Promise<void> {
   await writeFile(path, `#!/usr/bin/env node\n${source}\n`);
   await chmod(path, 0o700);
+}
+
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    await readFile(path);
+    return true;
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 test("launch opens a named Zellij tab with Pi and validated arguments", async () => {
@@ -123,6 +129,10 @@ test("launch rejects disallowed values and a missing Pi executable", async () =>
   );
   assert.throws(() => validateModel("bad;rm", undefined));
   assert.throws(() => safeText("😀😀", "tiny", 7), /UTF-8 bytes/);
+  await assert.rejects(
+    () => new FullSessionService({ piCommand: pi }, { ZELLIJ_SESSION_NAME: "test" }).launch({ cwd: `/${"x".repeat(8_192)}` }),
+    /UTF-8 bytes/,
+  );
 });
 
 test("obsolete and oversized configuration gets an actionable error", async () => {
@@ -158,6 +168,87 @@ test("Zellij startup and action failures are returned to the caller", async () =
   );
 });
 
+test("cancelling a launch kills and reaps the Zellij client", async () => {
+  const { root, cwd, pi } = await fixture();
+  const zellij = join(root, "cancelled-zellij.cjs");
+  const pidFile = join(root, "cancelled-pid");
+  await executable(zellij, `require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setTimeout(() => undefined, 10_000);`);
+  const controller = new AbortController();
+  const launch = new FullSessionService({
+    piCommand: pi,
+    zellijCommand: zellij,
+    zellijSession: "test",
+    zellijTimeoutMs: 10_000,
+  }, process.env).launch({ cwd }, controller.signal);
+  for (let attempt = 0; attempt < 100 && !(await fileExists(pidFile)); attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  assert.equal(await fileExists(pidFile), true);
+  controller.abort();
+  await assert.rejects(launch, error => error instanceof Error && error.name === "AbortError");
+  const pid = Number(await readFile(pidFile, "utf8"));
+  assert.throws(() => process.kill(pid, 0), (error: NodeJS.ErrnoException) => error.code === "ESRCH");
+});
+
+test("cancellation after client exit does not signal its process group", async () => {
+  const { root, cwd, pi } = await fixture();
+  const zellij = join(root, "exited-zellij.cjs");
+  const parentPidFile = join(root, "exited-parent-pid");
+  const descendantPidFile = join(root, "exited-descendant-pid");
+  await executable(zellij, `
+    const fs = require("node:fs");
+    const { spawn } = require("node:child_process");
+    fs.writeFileSync(${JSON.stringify(parentPidFile)}, String(process.pid));
+    const descendant = spawn(process.execPath, ["-e", "setTimeout(() => undefined, 10000)"], {stdio: ["ignore", "inherit", "inherit"]});
+    fs.writeFileSync(${JSON.stringify(descendantPidFile)}, String(descendant.pid));
+    process.exit(0);
+  `);
+  const controller = new AbortController();
+  const launch = new FullSessionService({
+    piCommand: pi,
+    zellijCommand: zellij,
+    zellijSession: "test",
+    zellijTimeoutMs: 10_000,
+  }, process.env).launch({ cwd }, controller.signal);
+  let descendantPid: number | undefined;
+  try {
+    for (let attempt = 0; attempt < 100 && !(await fileExists(parentPidFile)); attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.equal(await fileExists(parentPidFile), true);
+    for (let attempt = 0; attempt < 100 && !(await fileExists(descendantPidFile)); attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.equal(await fileExists(descendantPidFile), true);
+    const parentPid = Number(await readFile(parentPidFile, "utf8"));
+    descendantPid = Number(await readFile(descendantPidFile, "utf8"));
+    let parentExited = false;
+    for (let attempt = 0; attempt < 100 && !parentExited; attempt += 1) {
+      try {
+        process.kill(parentPid, 0);
+      } catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+        parentExited = true;
+      }
+      if (!parentExited) await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.equal(parentExited, true);
+    controller.abort();
+    await assert.rejects(launch, error => error instanceof Error && error.name === "AbortError");
+    assert.doesNotThrow(() => process.kill(descendantPid!, 0));
+  } finally {
+    controller.abort();
+    await launch.catch(() => undefined);
+    if (descendantPid !== undefined) {
+      try {
+        process.kill(descendantPid, "SIGKILL");
+      } catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+      }
+    }
+  }
+});
+
 test("a hung Zellij client is killed and reaped before failure is returned", async () => {
   const { root, cwd, pi } = await fixture();
   const zellij = join(root, "hung-zellij.cjs");
@@ -168,9 +259,10 @@ test("a hung Zellij client is killed and reaped before failure is returned", asy
       piCommand: pi,
       zellijCommand: zellij,
       zellijSession: "test",
-      zellijTimeoutMs: 100,
+      // Allow the fake Node client to start even under parallel CI load.
+      zellijTimeoutMs: 1_000,
     }, process.env).launch({ cwd }),
-    /timed out after 100ms; the tab launch outcome is unknown/,
+    /timed out after 1000ms; the tab launch outcome is unknown/,
   );
 
   const pid = Number(await readFile(pidFile, "utf8"));

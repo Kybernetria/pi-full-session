@@ -2,31 +2,23 @@
   "name": "@kybernetria/pi-full-session",
   "version": "0.2.0",
   "type": "module",
-  "description": "Launch a real interactive Pi CLI session in a Zellij tab through pi-protocol.",
+  "description": "Launch a real interactive Pi CLI session in a Zellij tab through an ordinary Pi tool.",
   "keywords": [
     "pi-package",
-    "pi-protocol",
     "terminal",
     "zellij"
   ],
   "files": [
     "README.md",
     "extension.ts",
-    "src",
-    "pi.protocol.json",
-    "protocol.generated.ts"
+    "src"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/**/*.test.ts",
-    "protocol:check": "pi-protocol check .",
-    "protocol:generate": "pi-protocol generate ."
-  },
-  "piProtocol": {
-    "generated": "protocol.generated.ts"
+    "test": "tsx --test test/**/*.test.ts"
   },
   "dependencies": {
-    "@kybernetria/pi-protocol": "https://github.com/Kybernetria/pi-protocol/releases/download/v4.0.0/kybernetria-pi-protocol-4.0.0.tgz"
+    "typebox": "^1.0.65"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "^0.80.10"

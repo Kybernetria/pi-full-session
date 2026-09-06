@@ -1,9 +1,12 @@
 import { isAbsolute, resolve } from "node:path";
 
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+const MAX_PATH_BYTES = 8_192;
 
 export function absoluteDir(value: unknown, name = "cwd"): string {
-  if (typeof value !== "string" || !value.trim() || /[\0-\x1f\x7f]/.test(value)) throw new Error(`${name} must be a non-empty path without control characters`);
+  if (typeof value !== "string" || !value.trim() || Buffer.byteLength(value, "utf8") > MAX_PATH_BYTES || /[\0-\x1f\x7f]/.test(value)) {
+    throw new Error(`${name} must be a non-empty path up to ${MAX_PATH_BYTES} UTF-8 bytes without control characters`);
+  }
   if (!isAbsolute(value)) throw new Error(`${name} must be absolute`);
   return resolve(value);
 }

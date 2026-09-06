@@ -65,7 +65,7 @@ export class FullSessionService {
     private readonly environment: NodeJS.ProcessEnv = process.env,
   ) {}
 
-  async launch(input: unknown): Promise<LaunchResult> {
+  async launch(input: unknown, signal?: AbortSignal): Promise<LaunchResult> {
     if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("launch input must be an object");
     const request = input as Record<string, unknown>;
     const supported = new Set(["cwd", "model", "thinking", "name", "initialPrompt"]);
@@ -94,6 +94,7 @@ export class FullSessionService {
       resolveExecutable(configuredPiCommand, this.environment, "piCommand"),
       resolveExecutable(configuredZellijCommand, this.environment, "zellijCommand"),
     ]);
+    if (signal?.aborted) throw abortError();
 
     const piSessionId = randomUUID();
     const piArgv = [
@@ -112,8 +113,9 @@ export class FullSessionService {
       "--", piCommand, ...piArgv,
     ];
 
-    await runZellij(zellijCommand, zellijArgv, cwd, this.environment, validateTimeout(this.config.zellijTimeoutMs))
+    await runZellij(zellijCommand, zellijArgv, cwd, this.environment, validateTimeout(this.config.zellijTimeoutMs), signal)
       .catch(error => {
+        if (isAbortError(error)) throw error;
         throw new Error(`Zellij failed to launch Pi session ${piSessionId}: ${errorMessage(error)}`);
       });
 
@@ -179,8 +181,13 @@ function runZellij(
   cwd: string,
   environment: NodeJS.ProcessEnv,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(abortError());
+      return;
+    }
     const grouped = process.platform !== "win32";
     const child = spawn(command, argv, {
       cwd,
@@ -191,16 +198,51 @@ function runZellij(
     let stdout: Buffer<ArrayBufferLike> = Buffer.alloc(0);
     let stderr: Buffer<ArrayBufferLike> = Buffer.alloc(0);
     let settled = false;
-    let timedOut = false;
+    let termination: "timeout" | "abort" | undefined;
+    let terminationFailure: Error | undefined;
     let exitObserved = false;
     let timer: NodeJS.Timeout | undefined;
+    let removeAbort: () => void = () => undefined;
 
     const finish = (error?: Error) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      removeAbort();
       if (error) reject(error);
       else resolve();
+    };
+    const terminationError = () => {
+      const error = termination === "abort"
+        ? abortError()
+        : new Error(`client timed out after ${timeoutMs}ms; the tab launch outcome is unknown`);
+      if (terminationFailure) error.message += `; cleanup failed: ${terminationFailure.message}`;
+      return error;
+    };
+    const terminate = (kind: "timeout" | "abort") => {
+      if (settled || termination) return;
+      termination = kind;
+      child.stdout.destroy();
+      child.stderr.destroy();
+      // Once exit is observed, the recorded PID/group may have been reused.
+      if (exitObserved) {
+        finish(terminationError());
+        return;
+      }
+      try {
+        if (grouped && child.pid) process.kill(-child.pid, "SIGKILL");
+        else child.kill("SIGKILL");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+          terminationFailure = new Error(errorMessage(error));
+          try {
+            if (!child.kill("SIGKILL")) terminationFailure = new Error("child.kill returned false");
+          } catch (fallbackError) {
+            terminationFailure = new Error(errorMessage(fallbackError));
+          }
+        }
+      }
+      if (exitObserved) finish(terminationError());
     };
     const append = (current: Buffer, chunk: Buffer | string): Buffer => {
       if (current.length >= MAX_ZELLIJ_OUTPUT_BYTES) return current;
@@ -213,32 +255,22 @@ function runZellij(
     child.once("error", error => finish(new Error(`client failed to start: ${error.message}`)));
     child.once("exit", () => {
       exitObserved = true;
-      if (!timedOut) return;
-      child.stdout.destroy();
-      child.stderr.destroy();
-      finish(new Error(`client timed out after ${timeoutMs}ms; the tab launch outcome is unknown`));
+      if (termination) finish(terminationError());
     });
     child.once("close", (code, signal) => {
-      if (timedOut) return finish(new Error(`client timed out after ${timeoutMs}ms; the tab launch outcome is unknown`));
+      if (termination) return finish(terminationError());
       if (code === 0) return finish();
       const detail = cleanDiagnostic(stderr.length ? stderr : stdout);
       if (signal) return finish(new Error(`client terminated by ${signal}${detail}`));
       return finish(new Error(`client exited with code ${code ?? "unknown"}${detail}`));
     });
-    timer = setTimeout(() => {
-      timedOut = true;
-      try {
-        if (grouped && child.pid) process.kill(-child.pid, "SIGKILL");
-        else child.kill("SIGKILL");
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
-          return finish(new Error(`client timed out and could not be killed: ${errorMessage(error)}`));
-        }
-      }
-      child.stdout.destroy();
-      child.stderr.destroy();
-      if (exitObserved) finish(new Error(`client timed out after ${timeoutMs}ms; the tab launch outcome is unknown`));
-    }, timeoutMs);
+    if (signal) {
+      const onAbort = () => terminate("abort");
+      signal.addEventListener("abort", onAbort, { once: true });
+      removeAbort = () => signal.removeEventListener("abort", onAbort);
+      if (signal.aborted) terminate("abort");
+    }
+    timer = setTimeout(() => terminate("timeout"), timeoutMs);
     timer.unref?.();
   });
 }
@@ -285,6 +317,16 @@ async function existingDirectory(path: string): Promise<string> {
   await access(path, constants.R_OK | constants.X_OK);
   if (!(await stat(path)).isDirectory()) throw new Error("cwd must be an existing directory");
   return absoluteDir(await realpath(path));
+}
+
+function abortError(): Error {
+  const error = new Error("client launch cancelled");
+  error.name = "AbortError";
+  return error;
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
 }
 
 function errorMessage(error: unknown): string {

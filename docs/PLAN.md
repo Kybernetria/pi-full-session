@@ -6,11 +6,11 @@ Launch a durable, interactive Pi CLI/TUI process in a new tab of an existing Zel
 
 ## Public API
 
-The node exposes only `launch`.
+The package exposes only the `pi_full_session_launch` ordinary Pi tool.
 
 `launch` validates an existing absolute working directory and optional Pi model, thinking level, name, and initial prompt. It resolves and checks the Pi executable, creates a Zellij tab in the configured or inherited session, runs Pi there with direct argv, and returns the canonical directory and generated Pi session UUID.
 
-A supplied name is used independently for both the Zellij tab and Pi session. The protocol output intentionally does not expose lifecycle controls or promise that Pi remains running after Zellij accepts the tab.
+A supplied name is used independently for both the Zellij tab and Pi session. The tool output intentionally does not expose lifecycle controls or promise that Pi remains running after Zellij accepts the tab.
 
 ## Zellij boundary
 
