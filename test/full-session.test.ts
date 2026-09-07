@@ -21,6 +21,99 @@ test("extension registers the ordinary launch tool", () => {
   assert.deepEqual(registered, ["pi_full_session_launch"]);
 });
 
+const rendererTheme = {
+  bold: (text: string) => text,
+  fg: (_color: string, text: string) => text,
+};
+
+function renderComponent(component: { render(width: number): string[] }): string {
+  return component.render(1_000).map(line => line.trimEnd()).join("\\n");
+}
+
+test("renderer tolerates partial call arguments and partial results", () => {
+  const tool = createLaunchTool();
+  assert.doesNotThrow(() => tool.renderCall!({} as never, rendererTheme as never, {} as never));
+  const callOutput = renderComponent(tool.renderCall!({} as never, rendererTheme as never, {} as never));
+  assert.equal(callOutput, "Launch Pi session → …");
+  const unsafeCallOutput = renderComponent(tool.renderCall!(
+    { cwd: "/safe/\u001b[31m", name: "tab\u001b]8;;https://attacker.invalid\u0007" } as never,
+    rendererTheme as never,
+    {} as never,
+  ));
+  assert.match(unsafeCallOutput, /Launch Pi session → \/safe/);
+  assert.doesNotMatch(unsafeCallOutput, /\u001b|attacker/);
+
+  const resultOutput = renderComponent(tool.renderResult!(
+    { content: [], details: undefined } as never,
+    { isPartial: true, expanded: false },
+    rendererTheme as never,
+    undefined as never,
+  ));
+  assert.equal(resultOutput, "Launching Pi session…");
+});
+
+test("renderer keeps legacy successful receipts renderable without provenance", () => {
+  const tool = createLaunchTool();
+  const output = renderComponent(tool.renderResult!(
+    { content: [], details: { launched: true, piSessionId: "legacy-child", cwd: "/legacy/project" } } as never,
+    { isPartial: false, expanded: true },
+    rendererTheme as never,
+    { isError: false } as never,
+  ));
+  assert.match(output, /✓ Pi session launched/);
+  assert.match(output, /child legacy-child/);
+  assert.match(output, /cwd \/legacy\/project/);
+  assert.doesNotMatch(output, /Zellij|parent |launch /);
+});
+
+test("renderer shows bounded sanitized error content", () => {
+  const tool = createLaunchTool();
+  const failure = `\u001b]8;;https://attacker.invalid\u0007session not found\u001b[31m ${"x".repeat(400)}`;
+  const output = renderComponent(tool.renderResult!(
+    { content: [{ type: "text", text: failure }], details: undefined } as never,
+    { isPartial: false, expanded: false },
+    rendererTheme as never,
+    { isError: true } as never,
+  ));
+  assert.match(output, /Pi session launch failed: session not found/);
+  assert.doesNotMatch(output, /\u001b|https:\/\/attacker/);
+  assert.ok(output.length < 300);
+});
+
+test("renderer displays the complete new launch receipt", () => {
+  const tool = createLaunchTool();
+  const output = renderComponent(tool.renderResult!(
+    {
+      content: [],
+      details: {
+        launched: true,
+        piSessionId: "child-id",
+        cwd: "/project",
+        provenance: {
+          schemaVersion: 1,
+          launchId: "launch-id",
+          launchedAt: "2026-09-06T12:00:00.000Z",
+          piSessionId: "child-id",
+          cwd: "/project",
+          zellijSession: "zellij-session",
+          originatingSessionId: "parent-id",
+          originatingSessionFile: "/sessions/parent.jsonl",
+          originatingParentSessionFile: "/sessions/root.jsonl",
+          originatingToolCallId: "call-id",
+        },
+      },
+    } as never,
+    { isPartial: false, expanded: true },
+    rendererTheme as never,
+    { isError: false } as never,
+  ));
+  assert.match(output, /Zellij zellij-session/);
+  assert.match(output, /parent parent-id · tool call-id/);
+  assert.match(output, /launch launch-id · 2026-09-06T12:00:00\.000Z/);
+  assert.match(output, /parent file \/sessions\/parent\.jsonl/);
+  assert.match(output, /lineage parent \/sessions\/root\.jsonl/);
+});
+
 test("child session records inherited provenance once without adding conversation content", async () => {
   let sessionStart: ((event: unknown, ctx: unknown) => void) | undefined;
   const appended: Array<{ type: string; data: unknown }> = [];

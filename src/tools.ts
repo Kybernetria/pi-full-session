@@ -36,23 +36,50 @@ export function createLaunchTool(pi?: ExtensionAPI): ToolDefinition<typeof launc
     };
   },
   renderCall(args, theme) {
-    const name = typeof args.name === "string" ? ` ${display(args.name, 80)}` : "";
-    return new Text(`${theme.fg("toolTitle", theme.bold("Launch Pi session"))}${theme.fg("dim", ` → ${display(args.cwd, 120)}${name}`)}`, 0, 0);
+    const values = asRecord(args);
+    const cwd = display(values?.cwd, 120);
+    const name = display(values?.name, 80);
+    const target = cwd || "…";
+    return new Text(`${theme.fg("toolTitle", theme.bold("Launch Pi session"))}${theme.fg("dim", ` → ${target}${name ? ` ${name}` : ""}`)}`, 0, 0);
   },
-  renderResult(result, { isPartial, expanded }, theme) {
+  renderResult(result, options, theme, context) {
+    const isPartial = options?.isPartial === true;
+    const expanded = options?.expanded === true;
     if (isPartial) return new Text(theme.fg("warning", "Launching Pi session…"), 0, 0);
-    const details = result.details as LaunchResult | undefined;
-    if (!details?.launched) return new Text(theme.fg("error", "Pi session launch failed"), 0, 0);
-    const provenance = details.provenance;
+
+    const resultRecord = asRecord(result);
+    const details = asRecord(resultRecord?.details);
+    const errorText = resultText(resultRecord);
+    if (context?.isError === true || resultRecord?.isError === true || details?.launched !== true) {
+      const reason = display(errorText, 240);
+      const text = reason ? `Pi session launch failed: ${reason}` : "Pi session launch failed";
+      return new Text(theme.fg("error", text), 0, 0);
+    }
+
     let text = theme.fg("success", theme.bold("✓ Pi session launched"));
-    text += `\n${theme.fg("dim", `child ${details.piSessionId}`)}`;
-    text += `\n${theme.fg("dim", `cwd ${display(details.cwd, 160)}`)}`;
-    text += `\n${theme.fg("dim", `Zellij ${display(provenance.zellijSession, 120)}`)}`;
-    text += `\n${theme.fg("muted", `parent ${display(provenance.originatingSessionId, 120)} · tool ${display(provenance.originatingToolCallId ?? "unavailable", 120)}`)}`;
-    if (expanded) {
-      text += `\n${theme.fg("muted", `launch ${provenance.launchId} · ${provenance.launchedAt}`)}`;
-      if (provenance.originatingSessionFile) text += `\n${theme.fg("muted", `parent file ${display(provenance.originatingSessionFile, 200)}`)}`;
-      if (provenance.originatingParentSessionFile) text += `\n${theme.fg("muted", `lineage parent ${display(provenance.originatingParentSessionFile, 200)}`)}`;
+    text += `\n${theme.fg("dim", `child ${display(details?.piSessionId, 160) || "unavailable"}`)}`;
+    text += `\n${theme.fg("dim", `cwd ${display(details?.cwd, 160) || "unavailable"}`)}`;
+
+    const provenance = asRecord(details?.provenance);
+    if (provenance) {
+      if (typeof provenance.zellijSession === "string") {
+        text += `\n${theme.fg("dim", `Zellij ${display(provenance.zellijSession, 120)}`)}`;
+      }
+      if (typeof provenance.originatingSessionId === "string") {
+        const tool = display(provenance.originatingToolCallId, 120) || "unavailable";
+        text += `\n${theme.fg("muted", `parent ${display(provenance.originatingSessionId, 120)} · tool ${tool}`)}`;
+      }
+      if (expanded) {
+        const launchId = display(provenance.launchId, 120);
+        const launchedAt = display(provenance.launchedAt, 80);
+        if (launchId || launchedAt) {
+          text += `\n${theme.fg("muted", `launch ${launchId || "unavailable"} · ${launchedAt || "unavailable"}`)}`;
+        }
+        const parentFile = display(provenance.originatingSessionFile, 200);
+        if (parentFile) text += `\n${theme.fg("muted", `parent file ${parentFile}`)}`;
+        const lineageFile = display(provenance.originatingParentSessionFile, 200);
+        if (lineageFile) text += `\n${theme.fg("muted", `lineage parent ${lineageFile}`)}`;
+      }
     }
     return new Text(text, 0, 0);
   },
@@ -73,8 +100,27 @@ function piAppendLaunchProvenance(pi: ExtensionAPI | undefined, result: LaunchRe
   }
 }
 
-function display(value: string, max: number): string {
-  return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function resultText(result: Record<string, unknown> | undefined): string {
+  if (!result || !Array.isArray(result.content)) return "";
+  return result.content
+    .map(asRecord)
+    .filter((content): content is Record<string, unknown> => content?.type === "text" && typeof content.text === "string")
+    .map(content => content.text as string)
+    .join("\n");
+}
+
+function display(value: unknown, max: number): string {
+  if (typeof value !== "string") return "";
+  const safe = value
+    .replace(/\x1B(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1B\\)|[PX^_][^\x1B]*(?:\x1B\\)|[@-_])/g, "")
+    .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return safe.length <= max ? safe : `${safe.slice(0, max - 1)}…`;
 }
 
 export function registerFullSessionTools(pi: ExtensionAPI): void {
